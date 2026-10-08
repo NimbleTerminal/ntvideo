@@ -1,0 +1,7 @@
+{
+  "name": "ntvideo-browser-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {"test": "node --test web/surface.test.js", "test:browser": "node web/browser-test.js"},
+  "devDependencies": {"playwright": "1.58.2"}
+}

@@ -1,0 +1,8 @@
+/dist/
+/examples/player/player
+*.wasm
+
+/node_modules/
+
+/bin/
+/.task/

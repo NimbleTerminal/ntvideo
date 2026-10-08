@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ntvideo example</title>
+<style>
+ body { margin:0; background:#181818; color:white; font:16px system-ui; }
+ header { padding:12px; } #terminal { height:75vh; margin:12px; overflow:hidden; }
+ a { color:#8dcfff; }
+</style>
+<header>Video widget · click the video controls to play · <a href="?source=demo.mp4">demo.mp4</a></header>
+<div id="terminal" aria-label="Video player terminal"></div>
+<script src="wasm_exec.js"></script>
+<script type="module">
+ import {BoobaTerminal} from './booba/booba.js';
+ import {registerHost} from './surface.js';
+ const booba = new BoobaTerminal('terminal');
+ await booba.init();
+ const container=document.getElementById('terminal');
+ const unregister=registerHost('terminal',()=>{
+   // ghostty-web's first canvas is the terminal content canvas. Its CSS bounds
+   // include browser zoom; dividing by cols/rows avoids DPR double-scaling.
+   const canvas=container.querySelector('canvas');
+   const t=booba.term;
+   if(!canvas || !t || !t.cols || !t.rows) return null;
+   const r=canvas.getBoundingClientRect(), clip=container.getBoundingClientRect();
+   return {left:r.left,top:r.top,cellWidth:r.width/t.cols,cellHeight:r.height/t.rows,
+     clip,visible:canvas.isConnected && canvas.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}) && r.width>0 && r.height>0 && t.viewportY===0 && booba.getMode(1049)};
+ });
+ const go=new Go();
+ let resize;
+ // Go's bundled wasm_exec.js leaves scheduled timer callbacks alive on exit.
+ // Dispose host hooks synchronously and clear those timers before they can
+ // resume an exited runtime. The timer map is a private detail of the runtime
+ // copied by build-web, so only touch it when it has the expected shape.
+ go.exit=code=>{
+   clearInterval(resize);unregister();booba.dispose();
+   if(go._scheduledTimeouts instanceof Map){
+     for(const timer of go._scheduledTimeouts.values()) clearTimeout(timer);
+     go._scheduledTimeouts.clear();
+   }
+   delete globalThis.bubbletea_read;delete globalThis.bubbletea_write;delete globalThis.bubbletea_resize;
+   if(code) console.error(`Go exited with status ${code}`);
+ };
+ go.argv=['player',new URLSearchParams(location.search).get('source') || 'demo.mp4'];
+ const {instance}=await WebAssembly.instantiateStreaming(fetch('app.wasm'),go.importObject);
+ const running=go.run(instance);
+ booba.connectWasm();booba.focus();
+ // The terminal may initialize before the Go resize hook is installed.
+ resize=setInterval(()=>{if(globalThis.bubbletea_resize){bubbletea_resize(booba.cols,booba.rows);clearInterval(resize);}},25);
+ await running;
+ clearInterval(resize);
+</script>
+</html>

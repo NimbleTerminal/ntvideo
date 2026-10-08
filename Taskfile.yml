@@ -1,0 +1,314 @@
+# ntvideo - Copyright (c) 2026 Neomantra Corp.
+
+version: '3'
+
+env:
+  GOWORK: 'off'
+
+vars:
+  MODULES: ['.', 'examples/player']
+  EXE: '{{if eq OS "windows"}}.exe{{end}}'
+
+tasks:
+  default:
+    desc: 'Default task runs the "build" task'
+    deps: [build]
+
+  list:
+    desc: 'Lists available tasks'
+    cmds:
+      - task --list-all
+
+  dev-deps:
+    desc: 'Install browser test dependencies (requires Node/npm)'
+    cmds:
+      - npm ci
+
+###############################################################################
+# Go modules
+
+  ci:
+    desc: 'Preflight formatting, modules, race tests, vet, web checks, and portable builds'
+    cmds:
+      - task: fmt-check
+      - task: go-tidy-check
+      - task: go-verify
+      - task: whitespace-check
+      - task: test-race
+      - task: vet
+      - task: vet-wasm
+      - task: check-web
+      - task: test-web
+      - task: build-library
+      - task: build-fallback
+      - task: build-cross
+      - task: build-wasm-site
+
+  ci-native:
+    desc: 'Extended preflight for libmpv builds, vet, race tests, and generated-media playback'
+    cmds:
+      - task: build-ex-player
+      - task: vet-native
+      - task: test-native
+        vars: {CLI_ARGS: '-race -count=1'}
+      - task: test-video
+      - task: test-media
+        vars: {SOURCE: '{{.ROOT_DIR}}/dist/test-pattern.mp4'}
+
+  ci-full:
+    desc: 'Run portable, native media, and Chrome preflight checks (requires task dev-deps)'
+    cmds:
+      - task: ci
+      - task: ci-native
+      - task: test-browser
+
+  fmt-check:
+    desc: 'Check Go formatting without changing source files'
+    cmds:
+      - |
+        set -eu
+        unformatted_files=$(gofmt -l *.go examples/player)
+        if [ -n "$unformatted_files" ]; then
+          printf '%s\n' "$unformatted_files"
+          printf '%s\n' 'Run task fmt to format these files.' >&2
+          exit 1
+        fi
+
+  go-tidy-check:
+    desc: 'Check both modules without changing go.mod or go.sum'
+    cmds:
+      - for: {var: MODULES}
+        cmd: go -C '{{.ITEM}}' mod tidy -diff
+
+  go-verify:
+    desc: 'Verify dependency checksums in both modules'
+    cmds:
+      - for: {var: MODULES}
+        cmd: go -C '{{.ITEM}}' mod verify
+
+  whitespace-check:
+    desc: 'Check staged and unstaged diffs for whitespace errors'
+    cmds:
+      - git --no-pager diff --check
+      - git --no-pager diff --cached --check
+
+  test-race:
+    desc: 'Run both modules with the race detector, without libmpv'
+    cmds:
+      - for: {var: MODULES}
+        cmd: go -C '{{.ITEM}}' test -mod=readonly -race -count=1 ./...
+
+  vet-wasm:
+    desc: 'Vet both modules for js/wasm'
+    env: {GOOS: js, GOARCH: wasm, CGO_ENABLED: '0'}
+    cmds:
+      - for: {var: MODULES}
+        cmd: go -C '{{.ITEM}}' vet -mod=readonly ./...
+
+  vet-native:
+    desc: 'Vet both modules with the libmpv backend'
+    deps: [check-libmpv]
+    cmds:
+      - for: {var: MODULES}
+        cmd: go -C '{{.ITEM}}' vet -mod=readonly -tags libmpv ./...
+
+  check-web:
+    desc: 'Check JavaScript and build-script syntax'
+    cmds:
+      - sh -n scripts/build-web.sh
+      - |
+        set -eu
+        for file in web/*.js scripts/*.mjs; do
+          node --check "$file"
+        done
+
+  build-cross:
+    desc: 'Compile both modules for Linux and Windows without cgo'
+    env: {CGO_ENABLED: '0', GOARCH: amd64}
+    cmds:
+      - |
+        set -eu
+        mkdir -p bin/ci
+        for target_os in linux windows; do
+          GOOS="$target_os" go build -mod=readonly ./...
+          GOOS="$target_os" go -C examples/player build -mod=readonly -o "../../bin/ci/player-$target_os" .
+        done
+
+  go-tidy:
+    desc: 'Go tidy both modules'
+    run: once
+    cmds:
+      - go mod tidy
+      - cd examples/player && go mod tidy
+
+  fmt:
+    desc: 'Format both Go modules'
+    cmds:
+      - go fmt ./...
+      - cd examples/player && go fmt ./...
+
+  vet:
+    desc: 'Vet both Go modules'
+    cmds:
+      - go vet -mod=readonly ./...
+      - cd examples/player && go vet -mod=readonly ./...
+
+  test:
+    desc: 'Run Go tests across both modules (pass flags after --)'
+    cmds:
+      - go test -mod=readonly {{.CLI_ARGS}} ./...
+      - cd examples/player && go test -mod=readonly {{.CLI_ARGS}} ./...
+
+  test-native:
+    desc: 'Run libmpv tests across both modules (pass flags after --)'
+    deps: [check-libmpv]
+    cmds:
+      - go test -mod=readonly -tags libmpv {{.CLI_ARGS}} ./...
+      - cd examples/player && go test -mod=readonly -tags libmpv {{.CLI_ARGS}} ./...
+
+  test-media:
+    desc: 'Test native playback with a local clip (SOURCE=/path/to/video.mp4)'
+    deps: [check-libmpv]
+    requires:
+      vars: [SOURCE]
+    env:
+      NTVIDEO_TEST_FILE: '{{.SOURCE}}'
+    cmds:
+      - go test -mod=readonly -tags libmpv -race -count=1 -v . -run 'TestMPVPlayback|TestPausedInitialFrame|TestKittyPresentation'
+
+###############################################################################
+# Native player
+
+  build:
+    desc: 'Build the library and native player (requires libmpv)'
+    deps: [build-library, build-examples]
+
+  build-library:
+    desc: 'Build the portable library without a native media dependency'
+    cmds:
+      - go build -mod=readonly ./...
+
+  build-examples:
+    desc: 'Build native examples'
+    deps: [build-ex-player]
+
+  check-libmpv:
+    internal: true
+    run: once
+    preconditions:
+      - sh: 'pkg-config --exists mpv'
+        msg: 'Install libmpv development headers and pkg-config (macOS: brew install mpv pkg-config).'
+      - sh: 'test "$(go env CGO_ENABLED)" = 1'
+        msg: 'The native player needs cgo; use CGO_ENABLED=1 or task build-fallback.'
+    cmds:
+      - 'true'
+
+  build-ex-player:
+    desc: 'Build the libmpv player into bin/ntvideo'
+    deps: [check-libmpv]
+    cmds:
+      - cd examples/player && go build -mod=readonly -tags libmpv -o ../../bin/ntvideo{{.EXE}} .
+    sources:
+      - "*.go"
+      - examples/player/*.go
+      - go.mod
+      - go.sum
+      - examples/player/go.mod
+      - examples/player/go.sum
+      - Taskfile.yml
+    generates:
+      - bin/ntvideo{{.EXE}}
+
+  build-fallback:
+    desc: 'Build the player without libmpv into bin/ntvideo-fallback'
+    cmds:
+      - cd examples/player && go build -mod=readonly -o ../../bin/ntvideo-fallback{{.EXE}} .
+    sources:
+      - "*.go"
+      - examples/player/*.go
+      - go.mod
+      - go.sum
+      - examples/player/go.mod
+      - examples/player/go.sum
+      - Taskfile.yml
+    generates:
+      - bin/ntvideo-fallback{{.EXE}}
+
+  video:
+    desc: 'Build and run the native player (pass a quoted video path after --)'
+    aliases: [player, run]
+    deps: [build-ex-player]
+    interactive: true
+    cmds:
+      - bin/ntvideo{{.EXE}} {{.CLI_ARGS}}
+
+###############################################################################
+# WASM example site and browser tests
+
+  build-wasm-site:
+    desc: 'Build the WASM player and host assets into dist/'
+    cmds:
+      - ./scripts/build-web.sh
+
+  serve-wasm-site:
+    desc: 'Build and serve the browser player at http://localhost:8080 (override PORT)'
+    deps: [build-wasm-site]
+    cmds:
+      - node scripts/serve-web.mjs
+
+  demo-video:
+    desc: 'Generate dist/demo.mp4 as a test pattern when no demo clip is present (requires FFmpeg)'
+    status:
+      - test -f dist/demo.mp4
+    cmds:
+      - mkdir -p dist
+      - ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=640x360:rate=30 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 20 -c:v libx264 -pix_fmt yuv420p -c:a aac -movflags +faststart -y dist/demo.mp4
+
+  build-pages:
+    desc: 'Assemble the hosted browser demo into dist/ (WASM site plus a demo clip)'
+    deps: [build-wasm-site, demo-video]
+
+  test-web:
+    desc: 'Run browser-host geometry unit tests (requires Node)'
+    cmds:
+      - npm test
+
+  test-video:
+    desc: 'Generate a four-second browser test clip (requires FFmpeg with libx264)'
+    cmds:
+      - mkdir -p dist
+      - ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x180:rate=30 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 4 -c:v libx264 -pix_fmt yuv420p -c:a aac -movflags +faststart -y dist/test-pattern.mp4
+    sources:
+      - Taskfile.yml
+    generates:
+      - dist/test-pattern.mp4
+
+  test-browser:
+    desc: 'Run Chrome playback/control tests (run task dev-deps first; requires FFmpeg)'
+    deps: [build-wasm-site, test-video]
+    preconditions:
+      - sh: 'test -f node_modules/playwright/package.json'
+        msg: 'Run task dev-deps to install Playwright. Tests use the installed Chrome browser.'
+    env:
+      NTVIDEO_BROWSER_SOURCE: test-pattern.mp4
+    cmds:
+      - npm run test:browser
+
+###############################################################################
+# Cleanup (preserve user media in dist/)
+
+  clean:
+    desc: 'Remove generated players and browser assets; preserve user media'
+    deps: [clean-examples, clean-wasm-site]
+
+  clean-examples:
+    desc: 'Remove built players'
+    cmds:
+      - rm -f bin/ntvideo bin/ntvideo.exe bin/ntvideo-fallback bin/ntvideo-fallback.exe
+      - rm -f bin/ci/player-linux bin/ci/player-windows
+
+  clean-wasm-site:
+    desc: 'Remove generated browser assets and test clip; preserve other media'
+    cmds:
+      - rm -rf dist/booba dist/ghostty-web
+      - rm -f dist/app.wasm dist/wasm_exec.js dist/surface.js dist/index.html dist/test-pattern.mp4
