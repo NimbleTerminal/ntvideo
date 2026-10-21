@@ -14,7 +14,7 @@ globalThis.requestAnimationFrame=fn=>{frames.set(++next,fn);return next;};
 globalThis.cancelAnimationFrame=id=>frames.delete(id);
 globalThis.document={body:new Element(),hidden:false,baseURI:'http://localhost/',createElement:()=>new Element(),addEventListener:(name,fn)=>visibilityListeners.add(fn),removeEventListener:(name,fn)=>visibilityListeners.delete(fn)};
 globalThis.innerWidth=1000;globalThis.innerHeight=800;
-const {registerHost}=await import('./surface.js');
+const {registerHost,registerBoobaHost}=await import('./surface.js');
 function paint(){const callbacks=[...frames.values()];frames.clear();for(const fn of callbacks)fn();}
 
 test('CSS cell mapping, clipping, scroll visibility, resize, and host cleanup',()=>{
@@ -69,4 +69,34 @@ test('hidden documents pause immediately without an animation frame',()=>{
  for(const listener of visibilityListeners)listener();
  paint();assert.ok(video.paused);
  unregister();assert.equal(visibilityListeners.size,0);
+});
+
+test('canonical host global preserves the legacy alias',()=>{
+ assert.equal(globalThis.ntvideoHost,globalThis.ntchartsVideoHost);
+ assert.equal(typeof globalThis.ntvideoHost?.mount,'function');
+});
+test('Booba host measures CSS cells and follows movement, resize, scrollback and visibility',()=>{
+ let rect={left:20,top:30,width:800,height:400,right:820,bottom:430};
+ let clip={left:0,top:0,right:700,bottom:450};
+ let visible=true,alt=true;
+ const canvas={isConnected:true,checkVisibility:()=>visible,getBoundingClientRect:()=>rect};
+ const terminal={container:{querySelector:()=>canvas,getBoundingClientRect:()=>clip},term:{cols:80,rows:20,viewportY:0},getMode:mode=>mode===1049&&alt};
+ const unregister=registerBoobaHost('booba',terminal),video=new Element();
+ const surface=ntvideoHost.mount('booba',video,'Clip','',0),root=document.body.children.at(-1);
+ surface.layout(2,3,80,20,true);paint();
+ assert.equal(root.style.left,'40px');assert.equal(root.style.top,'90px');
+ assert.equal(root.style.width,'660px');assert.equal(root.style.height,'340px');
+ assert.equal(video.style.width,'800px');assert.equal(video.style.height,'400px');
+ rect={left:50,top:60,width:400,height:200,right:450,bottom:260};paint();
+ assert.equal(root.style.left,'60px');assert.equal(root.style.top,'90px');
+ assert.equal(video.style.width,'400px');assert.equal(video.style.height,'200px');
+ terminal.term.cols=40;paint();assert.equal(video.style.width,'800px');
+ terminal.term.viewportY=1;video.paused=false;paint();assert.ok(root.hidden&&video.paused);
+ terminal.term.viewportY=0;paint();assert.equal(root.hidden,false);assert.ok(video.paused);
+ alt=false;paint();assert.ok(root.hidden);alt=true;
+ visible=false;paint();assert.ok(root.hidden);visible=true;
+ canvas.isConnected=false;paint();assert.ok(root.hidden);canvas.isConnected=true;
+ terminal.term.rows=0;paint();assert.ok(root.hidden);terminal.term.rows=20;
+ terminal.term=null;paint();assert.ok(root.hidden);
+ unregister();assert.ok(root.removed);assert.equal(frames.size,0);
 });

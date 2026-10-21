@@ -12,6 +12,30 @@ export function registerHost(id, measure) {
   };
 }
 
+// Register an initialized go-booba BoobaTerminal. Geometry is re-read by each
+// surface's animation frame, so CSS zoom, resize and page movement need no extra
+// listeners. This helper supports alternate-screen terminals; inline scrollback
+// hosts should use registerHost with their own anchoring policy.
+export function registerBoobaHost(id, terminal) {
+  return registerHost(id, () => {
+    const container = terminal.container;
+    const canvas = container?.querySelector('canvas');
+    const t = terminal.term;
+    if (!canvas || !t || !(t.cols > 0) || !(t.rows > 0)) return null;
+    const r = canvas.getBoundingClientRect();
+    const c = container.getBoundingClientRect();
+    return {
+      left: r.left, top: r.top,
+      cellWidth: r.width / t.cols, cellHeight: r.height / t.rows,
+      clip: {left: Math.max(r.left, c.left), top: Math.max(r.top, c.top),
+        right: Math.min(r.right, c.right), bottom: Math.min(r.bottom, c.bottom)},
+      visible: canvas.isConnected &&
+        canvas.checkVisibility?.({checkOpacity: true, checkVisibilityCSS: true}) !== false &&
+        r.width > 0 && r.height > 0 && t.viewportY === 0 && terminal.getMode(1049)
+    };
+  });
+}
+
 // Only http(s) transcript links are rendered; other schemes could run script.
 function webHref(url) {
   if (!url) return '';
@@ -78,4 +102,6 @@ function mount(id, video, description, transcript, zIndex) {
   host.surfaces.add(surface); hide();raf=requestAnimationFrame(paint);
   return surface;
 }
-globalThis.ntchartsVideoHost = {mount};
+globalThis.ntvideoHost = {mount};
+// Compatibility with existing pages and older ntvideo WASM binaries.
+globalThis.ntchartsVideoHost = globalThis.ntvideoHost;

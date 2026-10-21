@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+ * Add `registerBoobaHost` for shared CSS geometry/visibility handling, with the canonical `ntvideoHost` bridge and the legacy alias.
+
  * Publish the embedded browser surface through `go tool ntvideo-assets DIR [--force]`; the example uses the same asset tool as downstream hosts.
 
  * Migrate to `ntpicture.Picture`, shared terminal sessions/ID allocators, asynchronous presentation pacing, and Close/Keep lifecycle commands. `Model.Close` now returns `tea.Cmd`; `Release` handles media-only teardown.

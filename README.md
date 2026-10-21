@@ -269,11 +269,18 @@ go tool ntvideo-assets dist
 
 ```html
 <script type="module">
-  import {registerHost} from './ntvideo/surface.js';
-  const unregister = registerHost('terminal', measureTerminal);
+  import {registerBoobaHost} from './ntvideo/surface.js';
+  // After await booba.init(), before starting WASM:
+  const unregister = registerBoobaHost('terminal', booba);
   // Register before starting WASM; call unregister when disposing the terminal.
 </script>
 ```
+
+`registerBoobaHost` accepts the initialized `BoobaTerminal` instance. It measures
+CSS cells and clips to the terminal canvas/container, tracks page movement and
+resize, and hides/pauses video in scrollback or outside the alternate screen.
+Other terminal hosts can use `registerHost(id, measure)`. The global bridge is
+`ntvideoHost`; `ntchartsVideoHost` remains an alias for older WASM clients.
 
 `nimbleterminal.dev/ntvideo/web.Assets` is also an embedded `fs.FS` for hosts that
 serve assets directly. It contains runtime files only.

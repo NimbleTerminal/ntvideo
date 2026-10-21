@@ -13,20 +13,10 @@
 <script src="wasm_exec.js"></script>
 <script type="module">
  import {BoobaTerminal} from './booba/booba.js';
- import {registerHost} from './ntvideo/surface.js';
+ import {registerBoobaHost} from './ntvideo/surface.js';
  const booba = new BoobaTerminal('terminal');
  await booba.init();
- const container=document.getElementById('terminal');
- const unregister=registerHost('terminal',()=>{
-   // ghostty-web's first canvas is the terminal content canvas. Its CSS bounds
-   // include browser zoom; dividing by cols/rows avoids DPR double-scaling.
-   const canvas=container.querySelector('canvas');
-   const t=booba.term;
-   if(!canvas || !t || !t.cols || !t.rows) return null;
-   const r=canvas.getBoundingClientRect(), clip=container.getBoundingClientRect();
-   return {left:r.left,top:r.top,cellWidth:r.width/t.cols,cellHeight:r.height/t.rows,
-     clip,visible:canvas.isConnected && canvas.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}) && r.width>0 && r.height>0 && t.viewportY===0 && booba.getMode(1049)};
- });
+ const unregister=registerBoobaHost('terminal',booba);
  const go=new Go();
  let resize;
  // Go's bundled wasm_exec.js leaves scheduled timer callbacks alive on exit.
