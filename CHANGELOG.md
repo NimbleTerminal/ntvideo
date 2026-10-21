@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+ * Publish the embedded browser surface through `go tool ntvideo-assets DIR [--force]`; the example uses the same asset tool as downstream hosts.
+
  * Migrate to `ntpicture.Picture`, shared terminal sessions/ID allocators, asynchronous presentation pacing, and Close/Keep lifecycle commands. `Model.Close` now returns `tea.Cmd`; `Release` handles media-only teardown.
  * Load libmpv at runtime through goffi; remove cgo, build-tag, and development-header requirements. Missing libraries report an installation hint.
  * Add headless `Probe`/`FrameAt` using FFmpeg tools, local-file validation and configurable limits, and pause-on-hide without automatic resume.

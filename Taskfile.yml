@@ -295,5 +295,5 @@ tasks:
   clean-wasm-site:
     desc: 'Remove generated browser assets and test clip; preserve other media'
     cmds:
-      - rm -rf dist/booba dist/ghostty-web
+      - rm -rf dist/booba dist/ghostty-web dist/ntvideo
       - rm -f dist/app.wasm dist/wasm_exec.js dist/surface.js dist/index.html dist/test-pattern.mp4

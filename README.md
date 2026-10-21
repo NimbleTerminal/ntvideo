@@ -255,7 +255,30 @@ replacements from dependencies:
 replace charm.land/bubbletea/v2 => github.com/neomantra/bubbletea/v2 v2.0.0-20261009201241-c397c32a5074
 ```
 
-Load `web/surface.js` and register a host before initializing the widget. See
+Publish the browser module without depending on the player or Booba:
+
+```go
+// In the host module's go.mod (alongside its ntvideo requirement):
+tool nimbleterminal.dev/ntvideo/cmd/ntvideo-assets
+```
+
+```sh
+go tool ntvideo-assets dist
+# Use --force to replace existing assets; otherwise existing files are skipped.
+```
+
+```html
+<script type="module">
+  import {registerHost} from './ntvideo/surface.js';
+  const unregister = registerHost('terminal', measureTerminal);
+  // Register before starting WASM; call unregister when disposing the terminal.
+</script>
+```
+
+`nimbleterminal.dev/ntvideo/web.Assets` is also an embedded `fs.FS` for hosts that
+serve assets directly. It contains runtime files only.
+
+Load `ntvideo/surface.js` and register a host before initializing the widget. See
 `web/index.html` for the go-booba integration. The host measures the content
 canvas in CSS pixels and supplies clipping and visibility. Applications must
 call `SetBounds` whenever layout changes; strings alone cannot reveal a widget's

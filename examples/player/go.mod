@@ -32,3 +32,5 @@ require (
 replace nimbleterminal.dev/ntvideo => ../..
 
 replace charm.land/bubbletea/v2 => github.com/neomantra/bubbletea/v2 v2.0.0-20261009201241-c397c32a5074
+
+tool nimbleterminal.dev/ntvideo/cmd/ntvideo-assets
