@@ -2,8 +2,9 @@ package ntvideo
 
 import (
 	"errors"
-	"github.com/NimbleMarkets/ntcharts/v2/picture"
 	"image"
+	"nimbleterminal.dev/ntpicture"
+	"nimbleterminal.dev/ntpicture/legacy"
 	"reflect"
 	"strings"
 	"testing"
@@ -243,11 +244,11 @@ func TestEnqueueDoesNotWaitForBackend(t *testing.T) {
 
 func TestKittyMediumDefaultsToSharedMemory(t *testing.T) {
 	m := New()
-	if got := m.pic.KittyMedium(); got != picture.KittyMediumSharedMemory {
+	if got := m.pic.KittyMedium(); got != ntpicture.KittyMediumSharedMemory {
 		t.Fatalf("default medium = %v, want shared memory", got)
 	}
-	m = New(WithKittyMedium(picture.KittyMediumDirect))
-	if got := m.pic.KittyMedium(); got != picture.KittyMediumDirect {
+	m = New(WithKittyMedium(ntpicture.KittyMediumDirect))
+	if got := m.pic.KittyMedium(); got != ntpicture.KittyMediumDirect {
 		t.Fatalf("medium = %v, want direct", got)
 	}
 }
@@ -265,12 +266,12 @@ func TestTransportReportsPresentedMedium(t *testing.T) {
 		t.Fatalf("transport stays glyph until Kitty is selected, got %q", got)
 	}
 	for _, tc := range []struct {
-		frame picture.KittyFrameMsg
+		frame legacy.KittyFrameMsg
 		want  string
 	}{
-		{picture.KittyFrameMsg{Medium: picture.KittyMediumSharedMemory, Format: picture.KittyFormatRGBA}, "kitty/shm"},
-		{picture.KittyFrameMsg{Medium: picture.KittyMediumDirect, Format: picture.KittyFormatRGBA}, "kitty/rgba"},
-		{picture.KittyFrameMsg{Medium: picture.KittyMediumDirect, Format: picture.KittyFormatPNG}, "kitty/png"},
+		{legacy.KittyFrameMsg{Medium: ntpicture.KittyMediumSharedMemory, Format: ntpicture.KittyFormatRGBA}, "kitty/shm"},
+		{legacy.KittyFrameMsg{Medium: ntpicture.KittyMediumDirect, Format: ntpicture.KittyFormatRGBA}, "kitty/rgba"},
+		{legacy.KittyFrameMsg{Medium: ntpicture.KittyMediumDirect, Format: ntpicture.KittyFormatPNG}, "kitty/png"},
 	} {
 		if got := kittyTransport(tc.frame); got != tc.want {
 			t.Fatalf("kittyTransport(%+v) = %q, want %q", tc.frame, got, tc.want)

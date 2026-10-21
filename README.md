@@ -4,8 +4,8 @@
 
 A Bubble Tea v2 video component for Golang Terminal applications. Browsers use a
 real HTML video element; native builds optionally use libmpv for playback and
-`ntcharts/picture` for Kitty graphics or half-block rendering. Audio belongs to
-the browser or the OS media backend.
+`ntpicture` (through its `legacy` compatibility API) for Kitty graphics or
+half-block rendering. Audio belongs to the browser or the OS media backend.
 
 This is an experimental MVP, with a portable public API offering native and brower playback.
 
@@ -24,7 +24,7 @@ v := ntvideo.New(
 )
 ```
 
-The component follows `picture.Model`'s pointer-mutating convention:
+The component follows `legacy.Model`'s pointer-mutating convention:
 
 - Return `v.Init()` from the parent model's `Init`.
 - Forward **every** Bubble Tea message to `v.Update(msg)` and run its returned command.
@@ -126,7 +126,7 @@ Press Enter for the centered small player with a 60×20 video/scrubber region
 (19 video rows and one scrubber row), or Enter again to expand. Borders and
 controls add two columns and eight rows. Both layouts shrink with the terminal;
 windows smaller than 28×12 show a resize hint. Press space to play. Kitty support is probed by picture; other terminals use
-half-blocks. Under tmux, enable passthrough as required by ntcharts/picture.
+half-blocks. Under tmux, enable passthrough as required by ntpicture.
 Native audio plays on the machine running the Go process, including over SSH.
 
 Kitty frames use shared memory by default. picture asks the terminal whether it
@@ -137,7 +137,7 @@ kilobytes of stream bandwidth. Terminals without shared memory, remote sessions,
 and sandboxes that cannot share a namespace fall back to direct PNG frames
 automatically. The player status line shows the active transport, which
 `Model.Transport()` also reports (`kitty/shm`, `kitty/png`, `glyph`, `dom`).
-`WithKittyMedium(picture.KittyMediumDirect)` forces direct transmission.
+`WithKittyMedium(ntpicture.KittyMediumDirect)` forces direct transmission.
 
 `go run . demo.mp4` without the tag builds without any media dependency and shows
 a useful unavailable-backend status. `ntvideo.Capabilities()` reports compiled and
@@ -171,7 +171,7 @@ include this replacement in their own go.mod**, because Go does not inherit
 replacements from dependencies:
 
 ```go
-replace charm.land/bubbletea/v2 => github.com/neomantra/bubbletea/v2 v2.0.0-20260928192001-1b36865b418a
+replace charm.land/bubbletea/v2 => github.com/neomantra/bubbletea/v2 v2.0.0-20261009201241-c397c32a5074
 ```
 
 Load `web/surface.js` and register a host before initializing the widget. See

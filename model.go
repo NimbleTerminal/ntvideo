@@ -11,12 +11,13 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/NimbleMarkets/ntcharts/v2/picture"
+	"nimbleterminal.dev/ntpicture"
+	"nimbleterminal.dev/ntpicture/legacy"
 )
 
 var nextID atomic.Uint64
 
-// Model follows picture.Model's pointer-mutating component convention. Do not
+// Model follows legacy.Model's pointer-mutating component convention. Do not
 // copy it after Init. Call its methods from the Bubble Tea event loop.
 // Playback setters enqueue work in call order; Init/Update drives that work.
 type Model struct {
@@ -25,7 +26,7 @@ type Model struct {
 	id                                      uint64
 	cfg                                     config
 	engine                                  *engine
-	pic                                     picture.Model
+	pic                                     legacy.Model
 	status                                  Status
 	started, closed, visible, focused, busy bool
 	epoch                                   uint64
@@ -52,7 +53,7 @@ type EventMsg struct {
 }
 
 func New(options ...Option) *Model {
-	c := config{bounds: CellRect{Cols: 60, Rows: 20}, volume: 1, host: "terminal", description: "Video", kittyMedium: picture.KittyMediumSharedMemory}
+	c := config{bounds: CellRect{Cols: 60, Rows: 20}, volume: 1, host: "terminal", description: "Video", kittyMedium: ntpicture.KittyMediumSharedMemory}
 	for _, o := range options {
 		o(&c)
 	}
@@ -61,7 +62,7 @@ func New(options ...Option) *Model {
 	m := &Model{id: id, cfg: c, visible: true, dom: Capabilities().DOM, engine: &engine{cfg: c}, status: Status{State: Idle, Volume: c.volume, Muted: c.muted}}
 	// Keep video IDs separate from picture's default/example IDs. Applications
 	// mixing custom picture IDs should reserve this range for video widgets.
-	m.pic = picture.NewWithConfig(picture.Config{KittyID: 0x560000 + int(id), Fit: c.fit.pictureFit(), KittyMedium: c.kittyMedium})
+	m.pic = legacy.NewModelWithConfig(ntpicture.Config{KittyID: 0x560000 + int(id), Fit: c.fit.pictureFit(), KittyMedium: c.kittyMedium})
 	r := mediaBounds(c)
 	m.pic.SetSize(r.Cols, r.Rows)
 	m.pic.SetImage(c.poster)
@@ -249,7 +250,7 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if msg.epoch != m.epoch {
 			return m.next()
 		}
-		if frame, ok := msg.msg.(picture.KittyFrameMsg); ok {
+		if frame, ok := msg.msg.(legacy.KittyFrameMsg); ok {
 			m.transport = kittyTransport(frame)
 		}
 		id := m.id
@@ -264,7 +265,7 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 	cmd := m.pic.Update(msg)
-	if m.pic.KittySupported() == picture.KittyCapabilitySupported && m.pic.Mode() == picture.PictureGlyph {
+	if m.pic.KittySupported() == ntpicture.KittyCapabilitySupported && m.pic.Mode() == ntpicture.PictureGlyph {
 		return tea.Batch(cmd, m.pic.Toggle())
 	}
 	return cmd
@@ -278,18 +279,18 @@ func (m *Model) Transport() string {
 	switch {
 	case m.dom:
 		return "dom"
-	case m.pic.Mode() != picture.PictureKitty:
+	case m.pic.Mode() != ntpicture.PictureKitty:
 		return "glyph"
 	case m.transport != "":
 		return m.transport
 	}
 	return "kitty"
 }
-func kittyTransport(frame picture.KittyFrameMsg) string {
+func kittyTransport(frame legacy.KittyFrameMsg) string {
 	switch {
-	case frame.Medium == picture.KittyMediumSharedMemory:
+	case frame.Medium == ntpicture.KittyMediumSharedMemory:
 		return "kitty/shm"
-	case frame.Format == picture.KittyFormatRGBA:
+	case frame.Format == ntpicture.KittyFormatRGBA:
 		return "kitty/rgba"
 	}
 	return "kitty/png"

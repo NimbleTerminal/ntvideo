@@ -6,9 +6,10 @@ import (
 	"bytes"
 	tea "charm.land/bubbletea/v2"
 	"encoding/base64"
-	"github.com/NimbleMarkets/ntcharts/v2/picture"
 	"github.com/charmbracelet/colorprofile"
 	"image/png"
+	"nimbleterminal.dev/ntpicture"
+	"nimbleterminal.dev/ntpicture/legacy"
 	"os"
 	"regexp"
 	"strconv"
@@ -80,13 +81,13 @@ func TestKittyPresentation(t *testing.T) {
 	if source == "" {
 		t.Skip("set NTVIDEO_TEST_FILE")
 	}
-	old := picture.KittySupported()
-	picture.ForceKittyCapability(picture.KittyCapabilitySupported)
-	defer picture.ForceKittyCapability(old)
+	old := legacy.KittySupported()
+	legacy.ForceKittyCapability(ntpicture.KittyCapabilitySupported)
+	defer legacy.ForceKittyCapability(old)
 	// The captured output is a pipe, not a terminal, so the shared-memory probe is
 	// never answered; request direct PNG frames explicitly so the payload check
 	// below does not depend on that fallback.
-	m := &capturePlayer{v: New(WithSource(source), WithMuted(true), WithKittyMedium(picture.KittyMediumDirect))}
+	m := &capturePlayer{v: New(WithSource(source), WithMuted(true), WithKittyMedium(ntpicture.KittyMediumDirect))}
 	defer m.v.Close()
 	var output bytes.Buffer
 	p := tea.NewProgram(m, tea.WithInput(nil), tea.WithOutput(&output), tea.WithWindowSize(80, 24), tea.WithColorProfile(colorprofile.TrueColor), tea.WithoutSignalHandler())

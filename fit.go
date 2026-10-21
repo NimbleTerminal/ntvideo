@@ -2,7 +2,7 @@ package ntvideo
 
 import (
 	tea "charm.land/bubbletea/v2"
-	"github.com/NimbleMarkets/ntcharts/v2/picture"
+	"nimbleterminal.dev/ntpicture"
 )
 
 // FitMode controls how video occupies its cell rectangle. Crops are centered.
@@ -30,14 +30,14 @@ func (f FitMode) String() string {
 		return "contain"
 	}
 }
-func (f FitMode) pictureFit() picture.FitMode {
+func (f FitMode) pictureFit() ntpicture.FitMode {
 	switch normalizeFit(f) {
 	case FitCover:
-		return picture.FitCover
+		return ntpicture.FitCover
 	case FitFill:
-		return picture.FitFill
+		return ntpicture.FitFill
 	default:
-		return picture.FitContain
+		return ntpicture.FitContain
 	}
 }
 func WithFit(f FitMode) Option { return func(c *config) { c.fit = normalizeFit(f) } }

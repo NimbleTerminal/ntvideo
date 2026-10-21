@@ -10,13 +10,14 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/NimbleMarkets/ntcharts/v2/picture"
+	"nimbleterminal.dev/ntpicture"
+	"nimbleterminal.dev/ntpicture/legacy"
 )
 
 func TestFitFillsEncodedWidgetRegion(t *testing.T) {
-	old := picture.KittySupported()
-	picture.ForceKittyCapability(picture.KittyCapabilitySupported)
-	defer picture.ForceKittyCapability(old)
+	old := legacy.KittySupported()
+	legacy.ForceKittyCapability(ntpicture.KittyCapabilitySupported)
+	defer legacy.ForceKittyCapability(old)
 	m := New(WithWidth(10), WithHeight(10))
 	src := image.NewRGBA(image.Rect(0, 0, 160, 40))
 	draw.Draw(src, src.Bounds(), image.NewUniform(color.RGBA{R: 255, A: 255}), image.Point{}, draw.Src)
@@ -27,7 +28,7 @@ func TestFitFillsEncodedWidgetRegion(t *testing.T) {
 		if cmd == nil {
 			t.Fatal("missing redraw")
 		}
-		frame := cmd().(picture.KittyFrameMsg)
+		frame := cmd().(legacy.KittyFrameMsg)
 		var payload []byte
 		for _, part := range regexp.MustCompile(`\x1b_G[^;]+;([^\x1b]*)\x1b\\`).FindAllStringSubmatch(frame.APC, -1) {
 			payload = append(payload, part[1]...)

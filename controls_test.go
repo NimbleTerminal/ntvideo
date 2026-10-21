@@ -2,7 +2,7 @@ package ntvideo
 
 import (
 	tea "charm.land/bubbletea/v2"
-	"github.com/NimbleMarkets/ntcharts/v2/picture"
+	"nimbleterminal.dev/ntpicture"
 	"strings"
 	"testing"
 	"time"
@@ -97,7 +97,7 @@ func TestFitChangesInvalidateFramesAndPreserveBounds(t *testing.T) {
 	}
 	m.SetFit(FitCover)
 	m.SetFit(FitMode(99))
-	if m.Fit() != FitContain || m.pic.Fit() != picture.FitContain {
+	if m.Fit() != FitContain || m.pic.Fit() != ntpicture.FitContain {
 		t.Fatal("invalid mode did not normalize")
 	}
 	m.Close()

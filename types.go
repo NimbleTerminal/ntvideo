@@ -7,7 +7,7 @@ import (
 	"image"
 	"time"
 
-	"github.com/NimbleMarkets/ntcharts/v2/picture"
+	"nimbleterminal.dev/ntpicture"
 )
 
 var (
@@ -73,7 +73,7 @@ type config struct {
 	host, description, transcript string
 	z                             int
 	poster                        image.Image
-	kittyMedium                   picture.KittyMedium
+	kittyMedium                   ntpicture.KittyMedium
 }
 type Option func(*config)
 
@@ -94,12 +94,12 @@ func WithPoster(img image.Image) Option { return func(c *config) { c.poster = im
 func WithZIndex(z int) Option           { return func(c *config) { c.z = z } }
 
 // WithKittyMedium selects how native Kitty frames are transmitted. The default is
-// picture.KittyMediumSharedMemory, which hands raw RGBA to a local terminal
+// ntpicture.KittyMediumSharedMemory, which hands raw RGBA to a local terminal
 // through a shared buffer and skips PNG encoding; picture falls back to direct
 // transmission unless the terminal answers its shared-memory probe. Pass
-// picture.KittyMediumDirect to always stream frames through the tty.
-func WithKittyMedium(m picture.KittyMedium) Option { return func(c *config) { c.kittyMedium = m } }
-func cloneSource(s Source) Source                  { s.Captions = append([]Caption(nil), s.Captions...); return s }
+// ntpicture.KittyMediumDirect to always stream frames through the tty.
+func WithKittyMedium(m ntpicture.KittyMedium) Option { return func(c *config) { c.kittyMedium = m } }
+func cloneSource(s Source) Source                    { s.Captions = append([]Caption(nil), s.Captions...); return s }
 func volume(v float64) float64 {
 	if v != v {
 		return 1
