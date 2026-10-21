@@ -94,6 +94,10 @@ func TestMPVPlayback(t *testing.T) {
 	frame = nil
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
+		// Keep processing asynchronous seek completion, as the host does.
+		if _, err = b.Poll(); err != nil {
+			t.Fatal(err)
+		}
 		frame, err = b.Frame(160, 90)
 		if err != nil {
 			t.Fatal(err)
