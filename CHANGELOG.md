@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+ * Add `WithNativeControls(false)` for terminal-owned browser input, document host-owned blob URLs, and test DOM lifecycle/status/autoplay errors under Node plus real keyboard input in Chrome.
+
  * Add `registerBoobaHost` for shared CSS geometry/visibility handling, with the canonical `ntvideoHost` bridge and the legacy alias.
 
  * Publish the embedded browser surface through `go tool ntvideo-assets DIR [--force]`; the example uses the same asset tool as downstream hosts.

@@ -21,12 +21,21 @@ type domBackend struct {
 	closed         bool
 }
 
+// Prefer the current bridge; older host pages can keep the legacy global.
+func browserHost() js.Value {
+	host := js.Global().Get("ntvideoHost")
+	if host.IsUndefined() || host.IsNull() {
+		host = js.Global().Get("ntchartsVideoHost")
+	}
+	return host
+}
+
 func platformCapabilities() CapabilitySet {
 	if js.Global().Get("document").IsUndefined() {
 		return CapabilitySet{DOM: true, Reason: "ntvideo: browser document unavailable"}
 	}
-	host := js.Global().Get("ntchartsVideoHost")
-	if host.IsUndefined() {
+	host := browserHost()
+	if host.IsUndefined() || host.IsNull() {
 		return CapabilitySet{DOM: true, Reason: "ntvideo: load web/surface.js and register a terminal host"}
 	}
 	v := js.Global().Get("document").Call("createElement", "video")
@@ -50,14 +59,17 @@ func newBackend(c config) (b backend, err error) {
 	err = jsTry(func() {
 		d.video = js.Global().Get("document").Call("createElement", "video")
 		v := d.video
-		v.Set("controls", true)
+		v.Set("controls", c.nativeControls)
+		if !c.nativeControls {
+			v.Set("tabIndex", -1)
+		}
 		v.Set("playsInline", true)
 		v.Set("preload", "metadata")
 		v.Set("loop", c.loop)
 		v.Set("muted", c.muted)
 		v.Set("volume", c.volume)
 		v.Call("setAttribute", "aria-label", c.description)
-		d.surface = js.Global().Get("ntchartsVideoHost").Call("mount", c.host, v, c.description, c.transcript, c.z)
+		d.surface = browserHost().Call("mount", c.host, v, c.description, c.transcript, c.z)
 	})
 	if err != nil {
 		return nil, err
@@ -207,6 +219,10 @@ func (b *domBackend) Poll() (s Status, err error) {
 func (*domBackend) Frame(int, int) (image.Image, error) { return nil, nil }
 func (b *domBackend) Close() error {
 	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return nil
+	}
 	b.closed = true
 	b.mu.Unlock()
 	return jsTry(func() {

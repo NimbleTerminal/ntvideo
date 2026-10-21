@@ -14,6 +14,20 @@ try{
  const source=process.env.NTVIDEO_BROWSER_SOURCE || "demo.mp4";
  await page.goto(`http://127.0.0.1:${server.address().port}/index.html?source=${encodeURIComponent(source)}`);
  await page.waitForFunction(()=>{const v=document.querySelector('video');return v&&v.readyState>=2&&!v.parentElement.hidden;},null,{timeout:20000});
+ const controlState=await page.evaluate(()=>{
+   const v=document.querySelector('video');
+   return {controls:v.controls,tabIndex:v.tabIndex,pointerEvents:getComputedStyle(v).pointerEvents,label:v.getAttribute('aria-label'),bridge:ntvideoHost===ntchartsVideoHost};
+ });
+ assert.deepEqual(controlState,{controls:false,tabIndex:-1,pointerEvents:'none',label:'Video demonstration',bridge:true});
+ // Clicking the overlay must leave input with the terminal. Use real keyboard
+ // events, not the WASM bridge, to verify the host retains Space and arrow keys.
+ await page.evaluate(()=>{document.querySelector('video').muted=true;});
+ await page.locator('#terminal canvas').first().click();
+ await page.keyboard.press('Space');
+ await page.waitForFunction(()=>!document.querySelector('video').paused);
+ await page.keyboard.press('Space');
+ await page.waitForFunction(()=>document.querySelector('video').paused);
+ assert.equal(await page.evaluate(()=>document.activeElement?.tagName==='VIDEO'),false);
  // The example starts expanded. Verify width, then switch to the small player.
  const cells=await page.evaluate(()=>{const v=document.querySelector('video').getBoundingClientRect(),c=document.querySelector('#terminal canvas').getBoundingClientRect();return {width:v.left-c.left,height:(v.top-c.top)/3};});
  assert.ok(cells.width>0&&cells.height>0);
@@ -81,10 +95,24 @@ try{
  await page.evaluate(()=>{document.getElementById('terminal').style.marginLeft='50px';});
  await page.waitForTimeout(100);
  assert.ok(await page.evaluate(()=>{const v=document.querySelector('video').getBoundingClientRect(),c=document.querySelector('#terminal canvas').getBoundingClientRect();return Math.abs(v.left+v.width/2-c.left-c.width/2)<12;}));
+ // Simulate a host supplying in-memory bytes. The host owns the URL; closing
+ // ntvideo removes the element but must not revoke the host's blob URL.
+ const blobURL=await page.evaluate(async source=>{
+   const blob=await (await fetch(source)).blob();
+   const url=URL.createObjectURL(blob),v=document.querySelector('video');
+   v.pause();v.src=url;v.load();return url;
+ },source);
+ await page.waitForFunction(()=>document.querySelector('video').readyState>=2);
+ await page.keyboard.press('Space');
+ await page.waitForFunction(()=>!document.querySelector('video').paused);
+ await page.keyboard.press('Space');
+ await page.waitForFunction(()=>document.querySelector('video').paused);
  // Escape the DOM controls and send quit to the Go program through its host.
  await page.evaluate(()=>bubbletea_write('q'));
  await page.waitForFunction(()=>!document.querySelector('video'));
  await page.waitForTimeout(250);
+ assert.ok(await page.evaluate(async url=>(await fetch(url)).ok,blobURL),'host-owned blob was revoked');
+ await page.evaluate(url=>URL.revokeObjectURL(url),blobURL);
  assert.deepEqual(errors,[]);
  console.log('PASS: WASM playback, fit modes, mouse scrubber/volume controls, resize, placement, and cleanup');
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

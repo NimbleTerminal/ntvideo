@@ -77,7 +77,7 @@ func main() {
 	if flag.NArg() > 0 {
 		source = flag.Arg(0)
 	}
-	v := ntvideo.New(ntvideo.WithRenderMode(mode), ntvideo.WithSource(source), ntvideo.WithScrubber(true), ntvideo.WithWidth(60), ntvideo.WithHeight(20), ntvideo.WithDescription("Video demonstration"))
+	v := ntvideo.New(ntvideo.WithNativeControls(false), ntvideo.WithRenderMode(mode), ntvideo.WithSource(source), ntvideo.WithScrubber(true), ntvideo.WithWidth(60), ntvideo.WithHeight(20), ntvideo.WithDescription("Video demonstration"))
 	defer v.Close()
 	v.Focus()
 	m := &model{v: v, expanded: true, source: source}

@@ -58,7 +58,7 @@ the thumb and release to seek to the previewed time. The parent must set
 `v.Update`, and keep `SetBounds` aligned with the widget's actual position.
 The example already does this. Unknown durations disable seeking; small widths
 omit timestamps. Hiding or resizing the widget cancels an active drag. Browser
-native controls remain available for accessible media interaction.
+native controls are enabled by default; hosts can opt out as described below.
 
 ## Glyph or raster rendering
 
@@ -158,6 +158,7 @@ task serve-wasm-site                      # copy a video to dist/demo.mp4 first
 PORT=9090 task serve-wasm-site             # custom port
 task build-pages                          # dist/ for GitHub Pages; generates a demo clip if absent
 task test-web
+task test-wasm                            # DOM backend tests under Node
 task dev-deps                             # install browser test dependencies
 task test-browser                        # generates its own 4-second test clip
 
@@ -241,8 +242,22 @@ static server if preferred.
 
 Use `?source=https://example.com/movie.mp4` for another source. Server policies,
 codec support, range requests, and cross-origin caption access must permit that
-source. Browser-native controls provide direct user gestures for playback;
-autoplay and programmatic play can be rejected by browser policy.
+source. `Source.URL` also accepts relative same-origin URLs and `blob:` URLs
+created by the host for embedded or dropped files. ntvideo assigns the URL to the
+video element; it does not fetch or copy the bytes. The **host owns each blob URL**
+and calls `URL.revokeObjectURL(url)` after `Close()` has removed the video (or after
+replacing the source). ntvideo never revokes URLs. Native sources remain local
+files only.
+
+Browser-native controls are on by default. Use `WithNativeControls(false)` when
+the terminal owns input: the video has no native controls, `tabIndex=-1`, and
+`pointer-events: none`. The host **must provide accessible keyboard controls**
+and an appropriate description; the video retains its `aria-label` and the
+surface retains its `role=status` text. `WithScrubber(true)` still draws and handles
+the terminal scrubber row from `Status`, including click-and-drag seeking.
+The example uses this mode: click the terminal and press Space to play/pause,
+or use its terminal controls. Autoplay and programmatic play can be rejected by
+browser policy; rejection is reported through `Status.Err`.
 
 The build copies go-booba's pinned browser assets from its Go module cache. The
 library does not depend on go-booba. The example's separate module does.

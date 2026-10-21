@@ -39,6 +39,7 @@ tasks:
       - task: vet-wasm
       - task: check-web
       - task: test-web
+      - task: test-wasm
       - task: build-library
       - task: build-fallback
       - task: build-cross
@@ -67,7 +68,7 @@ tasks:
     cmds:
       - |
         set -eu
-        unformatted_files=$(gofmt -l *.go examples/player)
+        unformatted_files=$(gofmt -l *.go examples/player cmd web)
         if [ -n "$unformatted_files" ]; then
           printf '%s\n' "$unformatted_files"
           printf '%s\n' 'Run task fmt to format these files.' >&2
@@ -257,6 +258,11 @@ tasks:
     desc: 'Run browser-host geometry unit tests (requires Node)'
     cmds:
       - npm test
+
+  test-wasm:
+    desc: 'Run DOM backend tests under Node with Go js/wasm'
+    cmds:
+      - GOOS=js GOARCH=wasm go test -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec" -run '^TestDOM' .
 
   test-video:
     desc: 'Generate a four-second browser test clip (requires FFmpeg with libx264)'

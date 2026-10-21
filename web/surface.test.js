@@ -100,3 +100,20 @@ test('Booba host measures CSS cells and follows movement, resize, scrollback and
  terminal.term=null;paint();assert.ok(root.hidden);
  unregister();assert.ok(root.removed);assert.equal(frames.size,0);
 });
+
+test('host-controlled videos keep pointer input on the terminal and hide immediately',()=>{
+ const unregister=registerHost('keys',()=>({left:0,top:0,cellWidth:10,cellHeight:20,visible:true}));
+ const video=new Element();video.controls=false;
+ const surface=ntvideoHost.mount('keys',video,'Video','',0),root=document.body.children.at(-1);
+ surface.layout(0,0,10,5,true);paint();
+ assert.equal(video.style.pointerEvents,'none');
+ video.paused=false;surface.layout(0,0,10,5,false);
+ assert.ok(root.hidden&&video.paused,'hide must not wait for a requestAnimationFrame');
+ surface.layout(0,0,10,5,true);paint();assert.ok(video.paused);
+ unregister();assert.ok(root.removed);
+});
+test('native controls retain pointer interaction',()=>{
+ const unregister=registerHost('native',()=>null),video=new Element();video.controls=true;
+ const surface=ntvideoHost.mount('native',video,'Video','',0);
+ assert.equal(video.style.pointerEvents,'auto');surface.close();unregister();
+});

@@ -37,7 +37,7 @@ type Caption struct {
 	Default                 bool
 }
 type Source struct {
-	URL      string    // Browser URL or, on native systems, a local filename.
+	URL      string    // Browser URL (including blob: and relative URLs) or a native local filename.
 	Captions []Caption // WebVTT URLs in browsers; external subtitle files natively.
 }
 type Track struct {
@@ -71,6 +71,7 @@ type config struct {
 	bounds                        CellRect
 	volume                        float64
 	muted, loop, autoplay         bool
+	nativeControls                bool
 	host, description, transcript string
 	z                             int
 	poster                        image.Image
@@ -126,3 +127,9 @@ func WithImageIDAllocator(f func() (int, error)) Option { return func(c *config)
 // platform defaults. Loading happens only when media is first sampled.
 func WithLibraryPath(path string) Option { return func(c *config) { c.libraryPath = path } }
 func WithLimits(l Limits) Option         { return func(c *config) { c.limits = l } }
+
+// WithNativeControls enables the browser's native video controls (default true).
+// When false, the video is out of the focus order and ignores pointer input;
+// the host must provide keyboard controls. WithScrubber still works normally.
+// This option has no effect on native terminal playback.
+func WithNativeControls(enabled bool) Option { return func(c *config) { c.nativeControls = enabled } }

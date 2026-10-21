@@ -51,7 +51,7 @@ type EventMsg struct {
 }
 
 func New(options ...Option) *Model {
-	c := config{bounds: CellRect{Cols: 60, Rows: 20}, volume: 1, host: "terminal", description: "Video", kittyMedium: ntpicture.KittyMediumSharedMemory}
+	c := config{nativeControls: true, bounds: CellRect{Cols: 60, Rows: 20}, volume: 1, host: "terminal", description: "Video", kittyMedium: ntpicture.KittyMediumSharedMemory}
 	for _, o := range options {
 		o(&c)
 	}

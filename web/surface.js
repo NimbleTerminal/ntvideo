@@ -54,7 +54,7 @@ function mount(id, video, description, transcript, zIndex) {
   if (!host) throw new Error(`No terminal surface host registered as ${id}`);
   const root = document.createElement('div');
   Object.assign(root.style, {position:'fixed', overflow:'hidden', pointerEvents:'none', zIndex:String(zIndex)});
-  Object.assign(video.style, {position:'absolute', objectFit:'contain', pointerEvents:'auto', background:'black'});
+  Object.assign(video.style, {position:'absolute', objectFit:'contain', pointerEvents:video.controls === false ? 'none' : 'auto', background:'black'});
   root.append(video);
   const status = document.createElement('span');
   status.setAttribute('role', 'status');
@@ -95,7 +95,7 @@ function mount(id, video, description, transcript, zIndex) {
     raf=requestAnimationFrame(paint);
   }
   const surface = {
-    layout(x,y,cols,rows,visible) {bounds={x,y,cols,rows,visible};},
+    layout(x,y,cols,rows,visible) {bounds={x,y,cols,rows,visible};if(!visible || cols<=0 || rows<=0)hide();},
     status(state) {if(state!==lastState){status.textContent=`${description}: ${state}`;lastState=state;}},
     close() {if(closed)return;closed=true;cancelAnimationFrame(raf);document.removeEventListener('visibilitychange',visibilityChanged);video.pause();root.remove();host.surfaces.delete(surface);}
   };
