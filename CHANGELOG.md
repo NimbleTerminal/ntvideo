@@ -1,16 +1,13 @@
 # CHANGELOG
 
-## Unreleased
+## v0.2.0 (2026-10-21)
 
- * Add `WithNativeControls(false)` for terminal-owned browser input, document host-owned blob URLs, and test DOM lifecycle/status/autoplay errors under Node plus real keyboard input in Chrome.
-
- * Add `registerBoobaHost` for shared CSS geometry/visibility handling, with the canonical `ntvideoHost` bridge and the legacy alias.
-
- * Publish the embedded browser surface through `go tool ntvideo-assets DIR [--force]`; the example uses the same asset tool as downstream hosts.
-
- * Migrate to `ntpicture.Picture`, shared terminal sessions/ID allocators, asynchronous presentation pacing, and Close/Keep lifecycle commands. `Model.Close` now returns `tea.Cmd`; `Release` handles media-only teardown.
- * Load libmpv at runtime through goffi; remove cgo, build-tag, and development-header requirements. Missing libraries report an installation hint.
- * Add headless `Probe`/`FrameAt` using FFmpeg tools, local-file validation and configurable limits, and pause-on-hide without automatic resume.
+ * Migrate to `ntpicture` with shared terminal sessions and image IDs; update dependencies, including Booba. **API change:** `Model.Close` now returns `tea.Cmd`; use `Release` for media-only teardown.
+ * Load libmpv at runtime through goffi, enabling pure-Go builds without mpv development headers. Report an installation hint when libmpv is missing.
+ * Add headless `Probe` and `FrameAt`, local-file validation, configurable media limits, and pause-on-hide.
+ * Add auto, glyph, and raster rendering modes with the player's **r** toggle; wait for terminal capability detection before switching to raster.
+ * Add `registerBoobaHost`, `WithNativeControls(false)`, and browser asset export through `go tool ntvideo-assets DIR [--force]`.
+ * Expand browser lifecycle and native playback tests, including H.264 and Ogg validation on Linux ARM64.
 
 ## v0.1.0 (2026-10-09)
 

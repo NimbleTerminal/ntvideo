@@ -9,6 +9,9 @@ half-block rendering. Audio belongs to the browser or the OS media backend.
 
 This is an experimental MVP, with a portable public API offering native and browser playback.
 
+For v0.2.0 changes, see the [changelog](CHANGELOG.md) and
+[migration guide](MIGRATING.md), including the `Model.Close` API change.
+
 ## Use
 
 ```go
@@ -191,8 +194,16 @@ to GitHub Pages from `main` with `task build-pages`.
 Go 1.26.8 or newer is required.
 
 ```sh
-# macOS; Linux: install libmpv2; Windows: install a trusted libmpv DLL.
+# macOS
 brew install mpv
+# Debian/Ubuntu: the mpv player package alone does not supply libmpv.
+sudo apt install libmpv2 ffmpeg
+```
+
+On Windows, install a trusted libmpv DLL. FFmpeg is needed for headless metadata
+and frame extraction, not native playback. Then run:
+
+```sh
 cd examples/player
 go run . /path/to/demo.mp4
 ```
@@ -278,8 +289,9 @@ tool nimbleterminal.dev/ntvideo/cmd/ntvideo-assets
 ```
 
 ```sh
-go tool ntvideo-assets dist
-# Use --force to replace existing assets; otherwise existing files are skipped.
+go tool ntvideo-assets dist --force
+# Refresh assets whenever the host upgrades ntvideo.
+# Omit --force to preserve existing files.
 ```
 
 ```html
@@ -296,6 +308,7 @@ CSS cells and clips to the terminal canvas/container, tracks page movement and
 resize, and hides/pauses video in scrollback or outside the alternate screen.
 Other terminal hosts can use `registerHost(id, measure)`. The global bridge is
 `ntvideoHost`; `ntchartsVideoHost` remains an alias for older WASM clients.
+Construct the widget with `WithHost("terminal")` to match the registered ID.
 
 `nimbleterminal.dev/ntvideo/web.Assets` is also an embedded `fs.FS` for hosts that
 serve assets directly. It contains runtime files only.
@@ -371,21 +384,30 @@ cd examples/player && CGO_ENABLED=0 go build .
 
 For native playback integration, set `NTVIDEO_TEST_FILE` to a local clip
 at least two seconds long with changing image content, then run
-`go test -race . -run 'TestMPVPlayback|TestHeadlessMedia' -v`.
+`go test -race . -run 'TestMPV|TestPausedInitialFrame|TestKittyPresentation|TestHeadlessMedia' -v`.
+Alternatively, `task test-media SOURCE='/absolute/path/to/movie.mp4'` runs those
+checks. Run it for each codec/container you want to validate.
 
 Browser checks use Node and the installed Chrome browser:
 
 ```sh
-npm ci
-npm test
-# After building dist/ and placing a compatible video at dist/demo.mp4:
-npm run test:browser
+task dev-deps
+task test-web
+task test-wasm
+task test-browser # builds the site and generates its test clip
 ```
 
 Validation in this checkout: macOS arm64, Go 1.27.1, and libmpv 0.41.0 passed
 race tests, vet, decoded-frame/playback/seek/audio-control/visibility integration,
 and the native example build. Chrome passed actual WASM playback, Go keyboard
 controls, seek, resize, geometry, and cleanup. Linux/amd64 and Windows/amd64
-fallback builds and js/wasm builds passed. Native Linux/Windows playback,
+fallback builds and js/wasm builds passed. Linux arm64 (dwarfspark, Go 1.27.3)
+passed H.264 and Ogg/Theora playback, pause/seek, paused-frame redraw, Kitty
+protocol output, headless extraction, and network-reference rejection three
+times each with the race detector, plus pure-Go playback and the full Go race
+suite. These automated Kitty checks do not verify a physical terminal display.
+Native Windows playback,
 audible output quality, real Kitty/tmux display, captions across browsers, and
 screen-reader behavior have not been manually verified.
+
+Repository development and validation guidance is in [AGENTS.md](AGENTS.md).
