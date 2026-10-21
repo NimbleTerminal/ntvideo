@@ -1,4 +1,4 @@
-//go:build !js && (!libmpv || !cgo)
+//go:build (darwin || linux || windows) && (amd64 || arm64)
 
 package ntvideo
 
@@ -8,7 +8,7 @@ import (
 )
 
 func TestUnsupportedBuildReportsOnceAndStops(t *testing.T) {
-	m := New(WithSource("clip.mp4"))
+	m := New(WithSource("clip.mp4"), WithLibraryPath("/nonexistent/ntvideo/libmpv"))
 	cmd := m.Update(m.sample()())
 	if !errors.Is(m.status.Err, ErrUnsupported) || m.status.State != Failed {
 		t.Fatalf("status %+v", m.status)

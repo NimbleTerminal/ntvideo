@@ -5,6 +5,7 @@ go 1.26.8
 require (
 	charm.land/bubbletea/v2 v2.1.0
 	github.com/charmbracelet/colorprofile v0.4.3
+	github.com/go-webgpu/goffi v0.6.7
 	nimbleterminal.dev/ntpicture v0.1.1
 )
 

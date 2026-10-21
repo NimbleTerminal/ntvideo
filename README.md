@@ -3,11 +3,11 @@
 **[Try the live browser demo](https://nimbleterminal.github.io/ntvideo/)**
 
 A Bubble Tea v2 video component for Golang Terminal applications. Browsers use a
-real HTML video element; native builds optionally use libmpv for playback and
-`ntpicture` (through its `legacy` compatibility API) for Kitty graphics or
+real HTML video element; native builds load libmpv at runtime for playback and
+`ntpicture.Picture` for Kitty graphics or
 half-block rendering. Audio belongs to the browser or the OS media backend.
 
-This is an experimental MVP, with a portable public API offering native and brower playback.
+This is an experimental MVP, with a portable public API offering native and browser playback.
 
 ## Use
 
@@ -24,7 +24,7 @@ v := ntvideo.New(
 )
 ```
 
-The component follows `legacy.Model`'s pointer-mutating convention:
+The component follows `ntpicture.Picture`'s pointer-mutating convention:
 
 - Return `v.Init()` from the parent model's `Init`.
 - Forward **every** Bubble Tea message to `v.Update(msg)` and run its returned command.
@@ -35,8 +35,10 @@ The component follows `legacy.Model`'s pointer-mutating convention:
   `ntvideo.EventMsg`, emitted when `Status` changes, using its ID to distinguish widgets.
 - Run commands returned by `SetBounds`, `SetSize`, and `SetVisible`. Positions
   are zero-based terminal **cells**, relative to the host's visible grid.
-- Before quitting, return `tea.Sequence(v.Shutdown(), tea.Quit)`. Also defer
-  `v.Close()` around `Program.Run()` to handle cancellation and errors.
+- Before quitting, return `tea.Sequence(v.Close(), tea.Quit)`. Also defer
+  `v.Close()` around `Program.Run()` to release resources on cancellation and
+  errors (terminal output requires running the returned command). `Shutdown`
+  remains an alias for `Close`. `Close` now returns `tea.Cmd`, not `error`.
 
 The parent owns keyboard bindings and focus policy. `Focus`, `Blur`, and
 `Focused` let it track selection; the component does not intercept global keys.
@@ -58,6 +60,61 @@ The example already does this. Unknown durations disable seeking; small widths
 omit timestamps. Hiding or resizing the widget cancels an active drag. Browser
 native controls remain available for accessible media interaction.
 
+## Host integration and lifecycle
+
+Playback starts **paused on the first frame, with sound enabled**. The host owns
+Space and all other keys. `WithAutoplay(true)` opts into automatic playback.
+`SetVisible(false)` pauses playback and hides the picture; showing it again does
+not resume sound. Call `Play()` explicitly to resume. Browser overlays also pause
+when their host, document, or visible region disappears.
+
+`Position()`, `Duration()`, and `Status()` expose timing for a host-owned seek bar.
+The built-in scrubber is optional. Native frame preparation is asynchronous for
+both glyphs and Kitty. Sampling waits for `ntpicture.PresentedMsg`; generation
+checks discard stale work after seeking, resizing, hiding, or loading. Image IDs
+come from `ntpicture.NextImageID`, with stable IDs for unchanged frame geometry.
+
+Share the same terminal session and allocator with other pictures:
+
+```go
+session := ntpicture.NewTerminalSession(ntpicture.TerminalOptions{})
+v := ntvideo.New(
+    ntvideo.WithTerminalSession(session),
+    ntvideo.WithImageIDAllocator(ntpicture.NextImageID),
+    ntvideo.WithSource("movie.mp4"),
+)
+// Host Init: return tea.Batch(session.Init(), v.Init())
+// Forward all terminal and picture messages to v.Update and run its commands.
+// The host closes session after all its components are finished.
+```
+
+`Keep()` releases playback resources and leaves the last committed frame on the
+current screen. `KeepOnMainScreen()` does the same while leaving the alternate
+screen: set the host view's `AltScreen` to false, include `v.View()` in that final
+view, and return `tea.Sequence(v.KeepOnMainScreen(), tea.Quit)`. Continue forwarding
+late messages to `Update`, including after closing. Closing after Keep preserves
+the retained picture. `Release() error` stops only media resources, without
+terminal output; use Close/Keep for the complete picture lifecycle.
+
+## Headless metadata and frames
+
+These functions need **ffprobe and ffmpeg**, but no terminal, libmpv, or audio
+device. They use local files only, disable network protocols, bound tool output,
+and impose a 15-second default deadline (also honoring context cancellation).
+
+```go
+info, err := ntvideo.Probe(ctx, "movie.mp4", ntvideo.HeadlessOptions{})
+// info: Duration, Width, Height, VideoCodec, AudioCodec, HasAudio
+frame, err := ntvideo.FrameAt(ctx, "movie.mp4", time.Second, ntvideo.HeadlessOptions{})
+// frame is an owned image.Image, suitable for PNG output, thumbnails or WithPoster.
+```
+
+`HeadlessOptions` accepts `Limits`, `Timeout`, and trusted executable paths
+`FFprobe`/`FFmpeg`. Missing tools and timestamps at/past EOF return errors. The
+viewer does not automatically spawn FFmpeg for a fallback; a host can obtain a
+poster with FrameAt and pass it through WithPoster. Without a poster or libmpv,
+the widget shows “install mpv to play video”.
+
 ## Task runner
 
 The Taskfile follows the sibling ntcharts repositories: `default` builds,
@@ -67,9 +124,9 @@ the browser example. Run `task list` for all tasks.
 ```sh
 task                                      # library + native libmpv player
 task video -- '/path/with spaces/movie.mp4' # build and play (aliases: player, run)
-task build-fallback                       # build without libmpv
+task build-fallback                       # compatibility name; runtime loader build
 task test -- -race                        # both Go modules
-task test-native -- -race                 # both modules with libmpv
+task test-native -- -race                 # both modules; media tests are opt-in
 task test-media SOURCE='/path/to/movie.mp4'
 task ci                                  # portable preflight, no source rewrites
 task ci-native                           # libmpv + real playback checks
@@ -87,19 +144,21 @@ task test-browser                        # generates its own 4-second test clip
 task clean                               # preserves user media in dist/
 ```
 
-Native builds require libmpv and cgo. Browser integration tests require installed
+Native builds use goffi and support `CGO_ENABLED=0` on macOS, Linux, and Windows
+(amd64/arm64). libmpv is needed only at playback time, not to start the host.
+No purego dependency is added. Browser integration tests require installed
 Chrome and FFmpeg with libx264. Build tasks do not automatically update or tidy
 module dependencies.
 
 `task ci` fails on formatting, untidy modules, checksum mismatches, whitespace,
 race-test failures, vet errors, JavaScript syntax/test failures, or build failures.
-It checks both Go modules, vets WASM, builds Linux/Windows fallback players, and
+It checks both Go modules, vets WASM, builds Linux/Windows players with `CGO_ENABLED=0`, and
 assembles the WASM demo. It requires Go with race-detector support, Git, Node/npm,
 and a POSIX shell; it does not require libmpv, FFmpeg, Chrome, or Playwright.
 It writes only build outputs/caches and does not run formatting or module fixes.
 Use `task fmt` or `task go-tidy` to fix their respective checks.
 
-`task ci-native` adds libmpv builds/vet/race tests and playback tests using a
+`task ci-native` adds runtime-loader builds/vet/race tests and playback tests using a
 generated FFmpeg clip. `task ci-full` runs both preflights plus the Chrome
 integration suite. Missing dependencies fail explicitly rather than skipping
 checks. GitHub Actions runs `task ci` and `task ci-native` on every push and pull
@@ -111,10 +170,10 @@ to GitHub Pages from `main` with `task build-pages`.
 Go 1.26.8 or newer is required.
 
 ```sh
-# macOS; Linux needs libmpv development headers and pkg-config as well.
-brew install mpv pkg-config
+# macOS; Linux: install libmpv2; Windows: install a trusted libmpv DLL.
+brew install mpv
 cd examples/player
-go run -tags libmpv . /path/to/demo.mp4
+go run . /path/to/demo.mp4
 ```
 
 The example starts as a bordered player filling the terminal, with a filename
@@ -139,10 +198,12 @@ automatically. The player status line shows the active transport, which
 `Model.Transport()` also reports (`kitty/shm`, `kitty/png`, `glyph`, `dom`).
 `WithKittyMedium(ntpicture.KittyMediumDirect)` forces direct transmission.
 
-`go run . demo.mp4` without the tag builds without any media dependency and shows
-a useful unavailable-backend status. `ntvideo.Capabilities()` reports compiled and
-environment support. Codec, media, audio-device, and permission failures remain
-runtime errors in `Status.Err`.
+No build tag, C compiler, mpv headers, or pkg-config is required. The loader
+searches for libmpv's platform library names (and standard Homebrew paths on
+macOS). `WithLibraryPath` selects a trusted explicit library. An unavailable
+library is reported through `Status.Err` as `ErrUnsupported`, without preventing
+the host from starting. `Capabilities()` reports backend support for this build;
+it deliberately does not load libmpv. Successful playback is the runtime check.
 
 ## Browser example
 
@@ -211,13 +272,22 @@ remains backend-specific.
 
 ## Security considerations
 
-Media sources are opened by the platform backend, so they carry that backend's
-trust model. Browsers apply CORS, CSP, and media policies. libmpv accepts local
-paths, HTTP(S), and other schemes of its own (`edl://`, `lavf://`, `fd://`, and
-more), so **native sources and caption paths must come from trusted input**, or
-the application must allowlist schemes before calling `WithSource`, `WithMedia`,
-or `Load`. The native backend disables mpv's user configuration, Lua scripts, and
-the youtube-dl hook, so a URL never spawns an external program.
+Native media and external captions must be local regular files. URLs, mpv
+pseudo-protocols, UNC paths, devices and directories are rejected. libmpv starts
+with `config=no`, `load-scripts=no`, `ytdl=no`, no default input bindings or OSC,
+no automatic subtitle/audio discovery, and `access-references=no`. FFmpeg
+protocol allowlists restrict nested inputs to `file` as well. Browser sources
+retain normal browser URL/CORS/CSP behavior; native file limits do not apply to
+the DOM backend.
+
+`WithLimits(Limits{...})` bounds native files and source dimensions. Defaults are
+2 GiB per file, 4096 per dimension, and 4096×2160 pixels. Headless operations use
+the same defaults. Native dimensions are checked when metadata becomes available
+and playback is stopped if they exceed limits. Presentation rasters are capped
+at 960×540 pixels. These checks are **not a decoder sandbox**: native decoding
+can allocate memory before metadata arrives, and files can change after checking.
+For strict CPU/memory/filesystem isolation, run decoding in a constrained worker.
+Library paths and FFmpeg executable paths must come from trusted host settings.
 
 `WithTranscript` renders a link only for http(s) or relative URLs. The example
 player strips terminal escape sequences from the source name and error text it
@@ -229,14 +299,14 @@ string. The bundled development server binds to the loopback interface only.
 ```sh
 go test -race ./...
 go vet ./...
-go test -tags libmpv -race ./...
+CGO_ENABLED=0 go test ./...
 GOOS=js GOARCH=wasm go build ./...
-cd examples/player && go build -tags libmpv .
+cd examples/player && CGO_ENABLED=0 go build .
 ```
 
 For native playback integration, set `NTVIDEO_TEST_FILE` to a local clip
 at least two seconds long with changing image content, then run
-`go test -tags libmpv -race . -run TestMPVPlayback -v`.
+`go test -race . -run 'TestMPVPlayback|TestHeadlessMedia' -v`.
 
 Browser checks use Node and the installed Chrome browser:
 

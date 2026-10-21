@@ -59,6 +59,9 @@ func (e *engine) sample(w, h int) (s Status, img image.Image) {
 	}
 	var err error
 	if e.b == nil {
+		if len(pending) == 0 {
+			return Status{State: Idle, Volume: e.cfg.volume, Muted: e.cfg.muted}, nil
+		}
 		e.b, err = newBackend(e.cfg)
 		if err != nil {
 			e.queueMu.Lock()

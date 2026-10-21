@@ -1,62 +1,6 @@
-//go:build libmpv && cgo && !js
+//go:build (darwin || linux || windows) && (amd64 || arm64)
 
 package ntvideo
-
-/*
-#cgo pkg-config: mpv
-#include <mpv/client.h>
-#include <mpv/render.h>
-#include <stdlib.h>
-#include <stdatomic.h>
-
-typedef struct { mpv_render_context *ctx; atomic_int dirty; } video_renderer;
-static void video_updated(void *p) { atomic_store(&((video_renderer*)p)->dirty, 1); }
-static video_renderer *video_renderer_new(mpv_handle *h, int *error) {
- video_renderer *r = calloc(1,sizeof(*r));
- if (!r) { *error=MPV_ERROR_NOMEM; return NULL; }
- atomic_init(&r->dirty,1);
- mpv_render_param params[]={{MPV_RENDER_PARAM_API_TYPE,MPV_RENDER_API_TYPE_SW},{0,NULL}};
- *error=mpv_render_context_create(&r->ctx,h,params);
- if (*error<0) {free(r);return NULL;}
- mpv_render_context_set_update_callback(r->ctx,video_updated,r);
- return r;
-}
-static int video_render(video_renderer *r, void *pixels, int w,int h,int force) {
- int dirty=atomic_exchange(&r->dirty,0);
- if (!dirty && !force) return 0;
- mpv_render_context_update(r->ctx);
- int size[]={w,h}; size_t stride=(size_t)w*4;
- mpv_render_param params[]={
-  {MPV_RENDER_PARAM_SW_SIZE,size},{MPV_RENDER_PARAM_SW_FORMAT,"rgb0"},
-  {MPV_RENDER_PARAM_SW_STRIDE,&stride},{MPV_RENDER_PARAM_SW_POINTER,pixels},{0,NULL}};
- int result=mpv_render_context_render(r->ctx,params);
- if(result<0)return result;
- mpv_render_context_report_swap(r->ctx);
- return 1;
-}
-static void video_renderer_free(video_renderer *r) {
- mpv_render_context_set_update_callback(r->ctx,NULL,NULL);
- mpv_render_context_free(r->ctx);free(r);
-}
-static int video_command(mpv_handle *h,const char *a,const char *b,const char *c) {
- const char *args[]={a,b,c,NULL};return mpv_command(h,args);
-}
-static double video_number(mpv_handle *h,const char *name) {
- double value=0;mpv_get_property(h,name,MPV_FORMAT_DOUBLE,&value);return value;
-}
-static int video_flag(mpv_handle *h,const char *name) {
- int value=0;mpv_get_property(h,name,MPV_FORMAT_FLAG,&value);return value;
-}
-static int video_event_error(mpv_event *ev) {
- if(ev->event_id==MPV_EVENT_END_FILE && ev->data) return ((mpv_event_end_file*)ev->data)->error;
- return ev->error;
-}
-static int video_event_end_reason(mpv_event *ev) {
- if(ev->event_id==MPV_EVENT_END_FILE && ev->data) return ((mpv_event_end_file*)ev->data)->reason;
- return -1;
-}
-*/
-import "C"
 
 import (
 	"errors"
@@ -72,7 +16,8 @@ import (
 )
 
 type mpvBackend struct {
-	handle           *C.mpv_handle
+	handle           unsafe.Pointer
+	lib              *mpvLibrary
 	cfg              config
 	stop, done       chan struct{}
 	mu               sync.Mutex // Protects only frame exchange; renderer never waits on control APIs.
@@ -81,6 +26,7 @@ type mpvBackend struct {
 	renderErr        error
 	redraw           bool
 	loading, loaded  bool
+	seekPending      bool
 	aspect           float64 // Control-thread metadata; dimensions sent to renderer under mu.
 	captions         []Caption
 	tracksAt         time.Time
@@ -90,35 +36,36 @@ type mpvBackend struct {
 func platformCapabilities() CapabilitySet {
 	return CapabilitySet{Playback: true, Audio: true, Captions: true, AudioTrackSelection: true}
 }
-func mpvError(code C.int) error {
-	if code >= 0 {
-		return nil
-	}
-	return fmt.Errorf("ntvideo: media backend: %s", C.GoString(C.mpv_error_string(code)))
-}
 func newBackend(c config) (backend, error) {
-	b := &mpvBackend{handle: C.mpv_create(), cfg: c, stop: make(chan struct{}), done: make(chan struct{}), width: 480, height: 320}
+	lib, err := openMPV(c.libraryPath)
+	if err != nil {
+		return nil, err
+	}
+	var handle unsafe.Pointer
+	lib.fn("mpv_create").call(unsafe.Pointer(&handle))
+	b := &mpvBackend{lib: lib, handle: handle, cfg: c, stop: make(chan struct{}), done: make(chan struct{}), width: 480, height: 320}
 	if b.handle == nil {
+		lib.close()
 		return nil, errors.New("ntvideo: could not allocate media backend")
 	}
 	// Sources are opened by libmpv alone: no user config, no Lua scripts, and no
 	// youtube-dl hook, which would otherwise run an external program for URLs.
 	// Without an audio device, play silently instead of failing.
-	opts := [][2]string{{"config", "no"}, {"terminal", "no"}, {"load-scripts", "no"}, {"ytdl", "no"}, {"vo", "libmpv"}, {"hwdec", "auto-copy"}, {"keep-open", "yes"}, {"idle", "yes"}, {"pause", "yes"}, {"audio-display", "no"}, {"osd-level", "0"}, {"audio-fallback-to-null", "yes"}}
+	opts := [][2]string{{"config", "no"}, {"input-default-bindings", "no"}, {"input-vo-keyboard", "no"}, {"osc", "no"}, {"access-references", "no"}, {"demuxer-lavf-o", "protocol_whitelist=file"}, {"stream-lavf-o", "protocol_whitelist=file"}, {"sub-auto", "no"}, {"audio-file-auto", "no"}, {"terminal", "no"}, {"load-scripts", "no"}, {"ytdl", "no"}, {"vo", "libmpv"}, {"hwdec", "auto-copy"}, {"keep-open", "yes"}, {"idle", "yes"}, {"pause", "yes"}, {"audio-display", "no"}, {"osd-level", "0"}, {"audio-fallback-to-null", "yes"}}
 	for _, o := range opts {
 		if err := b.option(o[0], o[1]); err != nil {
-			C.mpv_terminate_destroy(b.handle)
+			b.destroy()
 			return nil, err
 		}
 	}
-	if err := mpvError(C.mpv_initialize(b.handle)); err != nil {
-		C.mpv_terminate_destroy(b.handle)
+	if err := b.lib.err(b.lib.fn("mpv_initialize").integer(unsafe.Pointer(&b.handle))); err != nil {
+		b.destroy()
 		return nil, err
 	}
 	ready := make(chan error, 1)
 	go b.renderLoop(ready)
 	if err := <-ready; err != nil {
-		C.mpv_terminate_destroy(b.handle)
+		b.destroy()
 		return nil, err
 	}
 	if err := b.SetVolume(c.volume); err != nil {
@@ -137,55 +84,77 @@ func newBackend(c config) (backend, error) {
 	}
 	return b, nil
 }
+func (b *mpvBackend) destroy() {
+	b.lib.fn("mpv_terminate_destroy").call(nil, unsafe.Pointer(&b.handle))
+	b.lib.close()
+}
+func (b *mpvBackend) set(fn, name, value string) error {
+	n, v := cstring(name), cstring(value)
+	return b.lib.err(b.lib.fn(fn).integer(unsafe.Pointer(&b.handle), unsafe.Pointer(&n), unsafe.Pointer(&v)))
+}
 func (b *mpvBackend) option(name, value string) error {
-	n, v := C.CString(name), C.CString(value)
-	defer C.free(unsafe.Pointer(n))
-	defer C.free(unsafe.Pointer(v))
-	return mpvError(C.mpv_set_option_string(b.handle, n, v))
+	return b.set("mpv_set_option_string", name, value)
 }
 func (b *mpvBackend) property(name, value string) error {
-	n, v := C.CString(name), C.CString(value)
-	defer C.free(unsafe.Pointer(n))
-	defer C.free(unsafe.Pointer(v))
-	return mpvError(C.mpv_set_property_string(b.handle, n, v))
+	return b.set("mpv_set_property_string", name, value)
 }
-func (b *mpvBackend) command(a, bb, c string) error {
-	if strings.IndexByte(bb, 0) >= 0 || strings.IndexByte(c, 0) >= 0 {
+func (b *mpvBackend) command(a, arg, c string) error {
+	if strings.ContainsRune(arg, 0) || strings.ContainsRune(c, 0) {
 		return errors.New("ntvideo: invalid source or track")
 	}
-	ca, cb := C.CString(a), C.CString(bb)
-	defer C.free(unsafe.Pointer(ca))
-	defer C.free(unsafe.Pointer(cb))
-	var cc *C.char
+	args := []*byte{cstring(a), cstring(arg), nil, nil}
 	if c != "" {
-		cc = C.CString(c)
-		defer C.free(unsafe.Pointer(cc))
+		args[2] = cstring(c)
 	}
-	return mpvError(C.video_command(b.handle, ca, cb, cc))
+	ptr := unsafe.Pointer(&args[0])
+	code := b.lib.fn("mpv_command").integer(unsafe.Pointer(&b.handle), unsafe.Pointer(&ptr))
+	runtime.KeepAlive(args)
+	return b.lib.err(code)
 }
 func (b *mpvBackend) number(name string) float64 {
-	n := C.CString(name)
-	defer C.free(unsafe.Pointer(n))
-	return float64(C.video_number(b.handle, n))
+	n := cstring(name)
+	format := int32(5)
+	var value float64
+	ptr := unsafe.Pointer(&value)
+	b.lib.fn("mpv_get_property").integer(unsafe.Pointer(&b.handle), unsafe.Pointer(&n), unsafe.Pointer(&format), unsafe.Pointer(&ptr))
+	return value
 }
 func (b *mpvBackend) flag(name string) bool {
-	n := C.CString(name)
-	defer C.free(unsafe.Pointer(n))
-	return C.video_flag(b.handle, n) != 0
+	n := cstring(name)
+	format := int32(3)
+	var value int32
+	ptr := unsafe.Pointer(&value)
+	b.lib.fn("mpv_get_property").integer(unsafe.Pointer(&b.handle), unsafe.Pointer(&n), unsafe.Pointer(&format), unsafe.Pointer(&ptr))
+	return value != 0
 }
 func (b *mpvBackend) text(name string) string {
-	n := C.CString(name)
-	defer C.free(unsafe.Pointer(n))
-	s := C.mpv_get_property_string(b.handle, n)
-	if s == nil {
+	n := cstring(name)
+	var value unsafe.Pointer
+	b.lib.fn("mpv_get_property_string").call(unsafe.Pointer(&value), unsafe.Pointer(&b.handle), unsafe.Pointer(&n))
+	if value == nil {
 		return ""
 	}
-	defer C.mpv_free(unsafe.Pointer(s))
-	return C.GoString(s)
+	defer b.lib.fn("mpv_free").call(nil, unsafe.Pointer(&value))
+	return goString(value)
 }
 func (b *mpvBackend) Load(s Source) error {
+	s = cloneSource(s)
+	path, err := validateLocalFile(s.URL, b.cfg.limits)
+	if err != nil {
+		return err
+	}
+	s.URL = path
+	for i := range s.Captions {
+		path, err := validateLocalFile(s.Captions[i].Source, b.cfg.limits)
+		if err != nil {
+			return err
+		}
+		s.Captions[i].Source = path
+	}
 	b.loading = true
 	b.loaded = false
+	b.seekPending = false
+	b.clearFrame()
 	b.aspect = 0
 	b.captions = s.Captions
 	b.audio = nil
@@ -201,7 +170,12 @@ func (b *mpvBackend) Load(s Source) error {
 func (b *mpvBackend) Play() error  { return b.property("pause", "no") }
 func (b *mpvBackend) Pause() error { return b.property("pause", "yes") }
 func (b *mpvBackend) Seek(t time.Duration) error {
-	return b.command("seek", strconv.FormatFloat(t.Seconds(), 'f', 6, 64), "absolute+exact")
+	if err := b.command("seek", strconv.FormatFloat(t.Seconds(), 'f', 6, 64), "absolute+exact"); err != nil {
+		return err
+	}
+	b.seekPending = true
+	b.clearFrame()
+	return nil
 }
 func (b *mpvBackend) SetVolume(v float64) error {
 	return b.property("volume", strconv.FormatFloat(v*100, 'f', 3, 64))
@@ -240,22 +214,40 @@ func (*mpvBackend) SetFit(FitMode) error { return nil } // picture owns native f
 func (b *mpvBackend) Poll() (Status, error) {
 	var eventErr error
 	for i := 0; i < 256; i++ {
-		ev := C.mpv_wait_event(b.handle, 0)
-		if ev.event_id == C.MPV_EVENT_NONE {
+		var event unsafe.Pointer
+		timeout := float64(0)
+		b.lib.fn("mpv_wait_event").call(unsafe.Pointer(&event), unsafe.Pointer(&b.handle), unsafe.Pointer(&timeout))
+		if event == nil {
 			break
 		}
-		if e := mpvError(C.video_event_error(ev)); e != nil {
+		ev := *(*mpvEvent)(event)
+		if ev.ID == 0 {
+			break
+		}
+		code := ev.Error
+		reason := int32(-1)
+		if ev.ID == 7 && ev.Data != nil {
+			end := *(*mpvEndFile)(ev.Data)
+			code = end.Error
+			reason = end.Reason
+		}
+		if e := b.lib.err(code); e != nil {
 			eventErr = e
 		}
-		if ev.event_id == C.MPV_EVENT_END_FILE {
+		if ev.ID == 7 {
 			b.loading = false
-			if C.video_event_end_reason(ev) != C.MPV_END_FILE_REASON_EOF {
+			if reason != 0 {
 				b.loaded = false // Stopped or failed; keep-open retains EOF frames.
 			}
 		}
-		if ev.event_id == C.MPV_EVENT_FILE_LOADED {
+		if ev.ID == 21 { // MPV_EVENT_PLAYBACK_RESTART: a seek/load has settled.
+			b.seekPending = false
+			b.clearFrame()
+		}
+		if ev.ID == 8 {
 			b.loading = false
 			b.loaded = true
+			b.clearFrame()
 			b.tracksAt = time.Time{}
 			for _, c := range b.captions {
 				mode := "auto"
@@ -267,6 +259,14 @@ func (b *mpvBackend) Poll() (Status, error) {
 				}
 			}
 			b.captions = nil
+		}
+	}
+	if b.loaded {
+		if err := checkDimensions(int(b.number("width")), int(b.number("height")), b.cfg.limits); err != nil {
+			_ = b.command("stop", "", "")
+			b.loaded = false
+			b.clearFrame()
+			return Status{State: Failed}, err
 		}
 	}
 	s := Status{State: Idle, CurrentTime: time.Duration(b.number("time-pos") * float64(time.Second)), Duration: time.Duration(b.number("duration") * float64(time.Second)), Volume: b.number("volume") / 100, Muted: b.flag("mute")}
@@ -321,7 +321,16 @@ func (b *mpvBackend) Poll() (Status, error) {
 	}
 	return s, eventErr
 }
+func (b *mpvBackend) clearFrame() {
+	b.mu.Lock()
+	b.latest = nil
+	b.redraw = true
+	b.mu.Unlock()
+}
 func (b *mpvBackend) Frame(w, h int) (image.Image, error) {
+	if !b.loaded || b.seekPending {
+		return nil, nil
+	}
 	if b.aspect > 0 && !math.IsInf(b.aspect, 0) && !math.IsNaN(b.aspect) {
 		if float64(w)/float64(h) > b.aspect {
 			w = max(1, int(math.Round(float64(h)*b.aspect)))
@@ -344,18 +353,22 @@ func (b *mpvBackend) renderLoop(ready chan<- error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer close(b.done)
-	var code C.int
-	r := C.video_renderer_new(b.handle, &code)
-	if r == nil {
-		ready <- mpvError(code)
+	var renderer unsafe.Pointer
+	rendererPtr := unsafe.Pointer(&renderer)
+	api := cstring("sw")
+	params := []mpvRenderParam{{Kind: 1, Data: unsafe.Pointer(api)}, {}}
+	paramsPtr := unsafe.Pointer(&params[0])
+	code := b.lib.fn("mpv_render_context_create").integer(unsafe.Pointer(&rendererPtr), unsafe.Pointer(&b.handle), unsafe.Pointer(&paramsPtr))
+	runtime.KeepAlive(params)
+	runtime.KeepAlive(api)
+	if code < 0 {
+		ready <- b.lib.err(code)
 		return
 	}
-	defer C.video_renderer_free(r)
+	defer b.lib.fn("mpv_render_context_free").call(nil, unsafe.Pointer(&renderer))
 	ready <- nil
 	ticker := time.NewTicker(time.Second / 30)
 	defer ticker.Stop()
-	var pixels unsafe.Pointer
-	defer func() { C.free(pixels) }()
 	oldW, oldH := 0, 0
 	for {
 		select {
@@ -363,37 +376,39 @@ func (b *mpvBackend) renderLoop(ready chan<- error) {
 			return
 		case <-ticker.C:
 			b.mu.Lock()
-			w, h := b.width, b.height
-			redraw := b.redraw
+			w, h, redraw := b.width, b.height, b.redraw
 			b.redraw = false
 			b.mu.Unlock()
-			force := C.int(0)
-			if redraw {
-				force = 1
+			var flags uint64
+			b.lib.fn("mpv_render_context_update").call(unsafe.Pointer(&flags), unsafe.Pointer(&renderer))
+			if flags&1 == 0 && !redraw && w == oldW && h == oldH {
+				continue
 			}
-			if w != oldW || h != oldH {
-				C.free(pixels)
-				pixels = C.malloc(C.size_t(w * h * 4))
-				oldW, oldH = w, h
-				force = 1
+			oldW, oldH = w, h
+			data := make([]byte, w*h*4)
+			size := [2]int32{int32(w), int32(h)}
+			stride := uintptr(w * 4)
+			format := cstring("rgb0")
+			block := int32(0)
+			params := []mpvRenderParam{
+				{Kind: 17, Data: unsafe.Pointer(&size[0])},
+				{Kind: 18, Data: unsafe.Pointer(format)},
+				{Kind: 19, Data: unsafe.Pointer(&stride)},
+				{Kind: 20, Data: unsafe.Pointer(&data[0])},
+				{Kind: 12, Data: unsafe.Pointer(&block)}, {},
 			}
-			if pixels == nil {
+			pp := unsafe.Pointer(&params[0])
+			code := b.lib.fn("mpv_render_context_render").integer(unsafe.Pointer(&renderer), unsafe.Pointer(&pp))
+			runtime.KeepAlive(params)
+			runtime.KeepAlive(data)
+			runtime.KeepAlive(format)
+			if code < 0 {
 				b.mu.Lock()
-				b.renderErr = errors.New("ntvideo: frame allocation failed")
-				b.mu.Unlock()
-				return
-			}
-			result := C.video_render(r, pixels, C.int(w), C.int(h), force)
-			if result < 0 {
-				b.mu.Lock()
-				b.renderErr = mpvError(result)
+				b.renderErr = b.lib.err(code)
 				b.mu.Unlock()
 				continue
 			}
-			if result == 0 {
-				continue
-			}
-			data := C.GoBytes(pixels, C.int(w*h*4))
+			b.lib.fn("mpv_render_context_report_swap").call(nil, unsafe.Pointer(&renderer))
 			for i := 3; i < len(data); i += 4 {
 				data[i] = 255
 			}
@@ -406,9 +421,10 @@ func (b *mpvBackend) renderLoop(ready chan<- error) {
 		}
 	}
 }
+
 func (b *mpvBackend) Close() error {
 	close(b.stop)
 	<-b.done
-	C.mpv_terminate_destroy(b.handle)
+	b.destroy()
 	return nil
 }

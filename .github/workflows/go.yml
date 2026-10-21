@@ -24,12 +24,12 @@ jobs:
         uses: go-task/setup-task@v2
 
       - name: Install libmpv and FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libmpv-dev pkg-config ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libmpv2 ffmpeg
 
       - name: Portable preflight (format, modules, race tests, vet, web, builds)
         run: task ci
 
-      - name: Native preflight (libmpv builds, vet, race tests, generated-media playback)
+      - name: Native preflight (runtime libmpv, vet, race tests, generated-media playback)
         run: task ci-native
 
   browser:

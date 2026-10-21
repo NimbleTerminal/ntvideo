@@ -1,11 +1,16 @@
-//go:build libmpv && cgo && !js
+//go:build (darwin || linux || windows) && (amd64 || arm64)
 
 package ntvideo
 
 import (
 	"image"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -107,5 +112,67 @@ func TestMPVPlayback(t *testing.T) {
 	status, err = b.Poll()
 	if err != nil || status.Volume < 0.29 || status.Volume > 0.31 || !status.Muted {
 		t.Fatalf("audio control: %+v %v", status, err)
+	}
+}
+
+func TestMPVInputPolicy(t *testing.T) {
+	source := os.Getenv("NTVIDEO_TEST_FILE")
+	if source == "" {
+		t.Skip("set NTVIDEO_TEST_FILE")
+	}
+	raw, err := newBackend(config{muted: true, limits: Limits{MaxWidth: 100}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	b := raw.(*mpvBackend)
+	for _, s := range []string{"https://127.0.0.1/movie", "edl://x", "fd://0"} {
+		if err := b.Load(Source{URL: s}); err == nil {
+			t.Fatalf("accepted %q", s)
+		}
+	}
+	if err := b.Load(Source{URL: source}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_, err = b.Poll()
+		if err != nil {
+			if !strings.Contains(err.Error(), "dimensions") {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("resolution limit was not enforced")
+}
+
+func TestMPVDoesNotFollowNetworkPlaylist(t *testing.T) {
+	if os.Getenv("NTVIDEO_TEST_FILE") == "" {
+		t.Skip("set NTVIDEO_TEST_FILE")
+	}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1); http.Error(w, "blocked", 404) }))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "network.m3u")
+	if err := os.WriteFile(path, []byte("#EXTM3U\n"+server.URL+"/movie.mp4\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := newBackend(config{muted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err = b.Load(Source{URL: path}); err != nil {
+		return
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		b.Poll()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if requests.Load() != 0 {
+		t.Fatal("playlist opened a network URL")
 	}
 }

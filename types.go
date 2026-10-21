@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	ErrUnsupported = errors.New("ntvideo: no playback backend; use a browser host or build with -tags libmpv and CGO_ENABLED=1")
+	ErrUnsupported = errors.New("ntvideo: install mpv to play video (libmpv is unavailable)")
 	ErrClosed      = errors.New("ntvideo: closed")
 )
 
@@ -37,7 +37,7 @@ type Caption struct {
 	Default                 bool
 }
 type Source struct {
-	URL      string    // Browser URL or, on native systems, a filename or URL.
+	URL      string    // Browser URL or, on native systems, a local filename.
 	Captions []Caption // WebVTT URLs in browsers; external subtitle files natively.
 }
 type Track struct {
@@ -74,6 +74,10 @@ type config struct {
 	z                             int
 	poster                        image.Image
 	kittyMedium                   ntpicture.KittyMedium
+	session                       *ntpicture.TerminalSession
+	nextID                        func() (int, error)
+	libraryPath                   string
+	limits                        Limits
 }
 type Option func(*config)
 
@@ -106,3 +110,18 @@ func volume(v float64) float64 {
 	}
 	return max(0, min(1, v))
 }
+
+// WithTerminalSession shares discovery with the host. The host initializes,
+// updates and closes this session; ntvideo never closes a supplied session.
+func WithTerminalSession(s *ntpicture.TerminalSession) Option {
+	return func(c *config) { c.session = s }
+}
+
+// WithImageIDAllocator shares a positive 24-bit Kitty ID allocator with the host.
+// The default is ntpicture.NextImageID.
+func WithImageIDAllocator(f func() (int, error)) Option { return func(c *config) { c.nextID = f } }
+
+// WithLibraryPath selects an explicit trusted libmpv shared library. Empty uses
+// platform defaults. Loading happens only when media is first sampled.
+func WithLibraryPath(path string) Option { return func(c *config) { c.libraryPath = path } }
+func WithLimits(l Limits) Option         { return func(c *config) { c.limits = l } }

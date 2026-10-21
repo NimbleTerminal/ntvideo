@@ -1,4 +1,4 @@
-//go:build !js && (!libmpv || !cgo)
+//go:build !js && (!(darwin || linux || windows) || !(amd64 || arm64))
 
 package ntvideo
 

@@ -1,4 +1,4 @@
-//go:build libmpv && cgo && !js
+//go:build (darwin || linux || windows) && (amd64 || arm64)
 
 package ntvideo
 
@@ -9,10 +9,8 @@ import (
 	"github.com/charmbracelet/colorprofile"
 	"image/png"
 	"nimbleterminal.dev/ntpicture"
-	"nimbleterminal.dev/ntpicture/legacy"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -81,13 +79,11 @@ func TestKittyPresentation(t *testing.T) {
 	if source == "" {
 		t.Skip("set NTVIDEO_TEST_FILE")
 	}
-	old := legacy.KittySupported()
-	legacy.ForceKittyCapability(ntpicture.KittyCapabilitySupported)
-	defer legacy.ForceKittyCapability(old)
 	// The captured output is a pipe, not a terminal, so the shared-memory probe is
 	// never answered; request direct PNG frames explicitly so the payload check
 	// below does not depend on that fallback.
 	m := &capturePlayer{v: New(WithSource(source), WithMuted(true), WithKittyMedium(ntpicture.KittyMediumDirect))}
+	m.v.pic.SetTerminal(true, 8, 16)
 	defer m.v.Close()
 	var output bytes.Buffer
 	p := tea.NewProgram(m, tea.WithInput(nil), tea.WithOutput(&output), tea.WithWindowSize(80, 24), tea.WithColorProfile(colorprofile.TrueColor), tea.WithoutSignalHandler())
@@ -98,9 +94,6 @@ func TestKittyPresentation(t *testing.T) {
 	t.Logf("state=%s bytes=%d kitty transmissions=%d", m.v.Status().State, len(data), strings.Count(data, "\x1b_G"))
 	if !strings.Contains(data, "\U0010EEEE") {
 		t.Fatal("Kitty placeholder missing")
-	}
-	if !strings.Contains(data, "i="+strconv.Itoa(0x560000+int(m.v.id))) {
-		t.Fatal("Kitty image missing")
 	}
 	// Verify that the transmitted PNG actually contains a visible image, rather
 	// than merely checking that a Kitty command reached the output stream.

@@ -12,12 +12,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"nimbleterminal.dev/ntpicture"
-	"nimbleterminal.dev/ntpicture/legacy"
 )
 
 var nextID atomic.Uint64
 
-// Model follows legacy.Model's pointer-mutating component convention. Do not
+// Model follows ntpicture.Picture's pointer-mutating convention. Do not
 // copy it after Init. Call its methods from the Bubble Tea event loop.
 // Playback setters enqueue work in call order; Init/Update drives that work.
 type Model struct {
@@ -26,12 +25,16 @@ type Model struct {
 	id                                      uint64
 	cfg                                     config
 	engine                                  *engine
-	pic                                     legacy.Model
+	pic                                     *ntpicture.Picture
 	status                                  Status
 	started, closed, visible, focused, busy bool
 	epoch                                   uint64
 	dom                                     bool
 	transport                               string
+	awaiting                                bool
+	waitGeneration                          uint64
+	pictureCommands                         []tea.Cmd
+	kept                                    bool
 }
 type sampleMsg struct {
 	id, epoch uint64
@@ -39,11 +42,6 @@ type sampleMsg struct {
 	frame     image.Image
 }
 type wakeMsg struct{ id uint64 }
-type encodedMsg struct {
-	id, epoch uint64
-	msg       tea.Msg
-}
-type presentedMsg struct{ id uint64 }
 
 // EventMsg is emitted after a backend sample changes Status. Applications can
 // inspect it or read Status after forwarding messages. IDs distinguish widgets.
@@ -60,12 +58,10 @@ func New(options ...Option) *Model {
 	c.bounds = normalize(c.bounds)
 	id := nextID.Add(1)
 	m := &Model{id: id, cfg: c, visible: true, dom: Capabilities().DOM, engine: &engine{cfg: c}, status: Status{State: Idle, Volume: c.volume, Muted: c.muted}}
-	// Keep video IDs separate from picture's default/example IDs. Applications
-	// mixing custom picture IDs should reserve this range for video widgets.
-	m.pic = legacy.NewModelWithConfig(ntpicture.Config{KittyID: 0x560000 + int(id), Fit: c.fit.pictureFit(), KittyMedium: c.kittyMedium})
+	m.pic = ntpicture.New(ntpicture.Options{Session: c.session, NextID: c.nextID, AutoMode: true, StableID: true, Render: ntpicture.Config{Fit: c.fit.pictureFit(), KittyMedium: c.kittyMedium, MaxRasterPixels: 960 * 540}})
 	r := mediaBounds(c)
 	m.pic.SetSize(r.Cols, r.Rows)
-	m.pic.SetImage(c.poster)
+	// Store the poster until Init so no asynchronous command is discarded.
 	m.Load(c.source)
 	return m
 }
@@ -85,11 +81,19 @@ func (m *Model) Bounds() CellRect { return m.cfg.bounds }
 func (m *Model) Focus()           { m.focused = true }
 func (m *Model) Blur()            { m.focused = false }
 func (m *Model) Focused() bool    { return m.focused }
-func (m *Model) Play()            { m.engine.enqueue(func(b backend) error { return b.Play() }) }
-func (m *Model) Pause()           { m.engine.enqueue(func(b backend) error { return b.Pause() }) }
+func (m *Model) Play() {
+	if m.visible {
+		m.engine.enqueue(func(b backend) error { return b.Play() })
+	}
+}
+func (m *Model) Pause() { m.engine.enqueue(func(b backend) error { return b.Pause() }) }
 func (m *Model) Seek(t time.Duration) {
+	if m.closed {
+		return
+	}
 	t = max(0, t)
 	m.epoch++
+	m.pictureCommands = append(m.pictureCommands, m.pic.Stop())
 	m.engine.enqueue(func(b backend) error { return b.Seek(t) })
 }
 func (m *Model) SetVolume(v float64) {
@@ -120,7 +124,17 @@ func (m *Model) Load(s Source) {
 		return
 	}
 	m.status.State = Loading
-	m.engine.enqueue(func(b backend) error { return b.Load(s) })
+	m.pictureCommands = append(m.pictureCommands, m.pic.Stop())
+	visible := m.visible
+	m.engine.enqueue(func(b backend) error {
+		if err := b.Load(s); err != nil {
+			return err
+		}
+		if !visible {
+			return b.Pause()
+		}
+		return nil
+	})
 }
 func (m *Model) SetBounds(r CellRect) tea.Cmd {
 	if m.closed {
@@ -145,15 +159,22 @@ func (m *Model) SetVisible(v bool) tea.Cmd {
 	if m.closed {
 		return nil
 	}
+	if v == m.visible {
+		return nil
+	}
 	m.visible = v
 	m.scrubbing = false
 	m.epoch++
 	r := mediaBounds(m.cfg)
-	m.engine.enqueue(func(b backend) error { return b.Layout(r, v) })
-	if !v {
-		return m.pic.SetImage(nil)
-	}
-	return nil
+	m.engine.enqueue(func(b backend) error {
+		if !v {
+			if err := b.Pause(); err != nil {
+				return err
+			}
+		}
+		return b.Layout(r, v)
+	})
+	return m.pic.SetVisible(v)
 }
 func (m *Model) Init() tea.Cmd {
 	if m.started || m.closed {
@@ -161,12 +182,12 @@ func (m *Model) Init() tea.Cmd {
 	}
 	m.started = true
 	if m.dom {
-		return m.sample()
+		return tea.Batch(m.flushPictureCommands(), m.sample())
 	}
-	return tea.Batch(m.pic.Init(), m.sample())
+	return tea.Batch(m.pic.Init(), m.pic.SetImage(m.cfg.poster), m.flushPictureCommands(), m.sample())
 }
 func (m *Model) sample() tea.Cmd {
-	if m.busy || m.closed {
+	if m.busy || m.awaiting || m.closed {
 		return nil
 	}
 	m.busy = true
@@ -176,9 +197,7 @@ func (m *Model) sample() tea.Cmd {
 	w, h := r.Cols*cw, r.Rows*ch
 	// Bound CPU conversion and terminal bandwidth, preserving aspect ratio.
 	scale := math.Min(1, math.Min(960/float64(max(1, w)), 540/float64(max(1, h))))
-	// Avoid expanding the bounded media raster again before Kitty encoding.
-	// The next SetImage supplies fresh pixels for this resolution.
-	m.pic.SetKittyResolutionFactor(scale)
+	// Picture independently bounds its prepared raster to the same pixel budget.
 	w, h = max(1, int(float64(w)*scale)), max(1, int(float64(h)*scale))
 	if !m.visible || r.Cols == 0 || r.Rows == 0 {
 		w, h = 0, 0
@@ -210,19 +229,21 @@ func errorEqual(a, b error) bool {
 	return a == b || a.Error() == b.Error()
 }
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
+	// Even closed pictures must receive late preparation/retirement messages.
+	pictureCmd := tea.Batch(m.flushPictureCommands(), m.pic.Update(msg))
 	if m.closed {
-		return nil
+		return pictureCmd
 	}
 	m.updateScrubber(msg)
 	switch msg := msg.(type) {
 	case wakeMsg:
 		if msg.id == m.id {
-			return m.sample()
+			return tea.Batch(pictureCmd, m.sample())
 		}
-		return nil
+		return pictureCmd
 	case sampleMsg:
 		if msg.id != m.id {
-			return nil
+			return pictureCmd
 		}
 		var event tea.Cmd
 		if !statusEqual(m.status, msg.status) {
@@ -232,43 +253,43 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if errors.Is(msg.status.Err, ErrUnsupported) {
 			// This build has no backend. Report once and stop sampling.
 			m.busy = false
-			return event
+			return tea.Batch(pictureCmd, event)
 		}
 		if msg.epoch != m.epoch || msg.frame == nil || !m.visible {
-			return tea.Batch(event, m.next())
+			return tea.Batch(pictureCmd, event, m.next())
 		}
-		cmd := m.pic.SetImage(msg.frame)
-		if cmd == nil {
-			return tea.Batch(event, m.next())
+		m.busy = false
+		cmd := m.pic.SetImageImmutable(msg.frame)
+		m.awaiting = m.pic.Status().Busy
+		m.waitGeneration = m.pic.Status().Generation
+		if !m.awaiting {
+			return tea.Batch(pictureCmd, event, cmd, m.next())
 		}
-		id, epoch := m.id, m.epoch
-		return tea.Batch(event, func() tea.Msg { return encodedMsg{id, epoch, cmd()} })
-	case encodedMsg:
-		if msg.id != m.id {
-			return nil
+		return tea.Batch(pictureCmd, event, cmd)
+	case ntpicture.PresentedMsg:
+		if msg.Owner == m.pic && msg.Generation == m.pic.Status().Generation {
+			m.transport = kittyTransport(m.pic.Status())
+			if m.awaiting {
+				m.awaiting = false
+				return tea.Batch(pictureCmd, m.next())
+			}
 		}
-		if msg.epoch != m.epoch {
-			return m.next()
+	case ntpicture.ErrorMsg:
+		if msg.Owner == m.pic && msg.Generation == m.pic.Status().Generation {
+			m.status.Err = msg.Err
+			m.status.State = Failed
+			status := m.Status()
+			m.awaiting = false
+			return tea.Batch(pictureCmd, func() tea.Msg { return EventMsg{m.ID(), status} }, m.next())
 		}
-		if frame, ok := msg.msg.(legacy.KittyFrameMsg); ok {
-			m.transport = kittyTransport(frame)
-		}
-		id := m.id
-		return tea.Sequence(m.pic.Update(msg.msg), func() tea.Msg { return presentedMsg{id} })
-	case presentedMsg:
-		if msg.id == m.id {
-			return m.next()
-		}
-		return nil
 	}
-	if m.dom {
-		return nil
+	// Hiding, seeking or resizing can cancel a pending generation without a
+	// PresentedMsg. Resume the producer once Picture has drained its work.
+	if m.awaiting && !m.pic.Status().Busy && m.pic.Status().Generation != m.waitGeneration {
+		m.awaiting = false
+		return tea.Batch(pictureCmd, m.next())
 	}
-	cmd := m.pic.Update(msg)
-	if m.pic.KittySupported() == ntpicture.KittyCapabilitySupported && m.pic.Mode() == ntpicture.PictureGlyph {
-		return tea.Batch(cmd, m.pic.Toggle())
-	}
-	return cmd
+	return pictureCmd
 }
 
 // Transport names how frames reach the terminal: "dom" for the browser video
@@ -286,7 +307,7 @@ func (m *Model) Transport() string {
 	}
 	return "kitty"
 }
-func kittyTransport(frame legacy.KittyFrameMsg) string {
+func kittyTransport(frame ntpicture.Status) string {
 	switch {
 	case frame.Medium == ntpicture.KittyMediumSharedMemory:
 		return "kitty/shm"
@@ -312,8 +333,8 @@ func (m *Model) mediaView() string {
 	if r.Cols == 0 || r.Rows == 0 {
 		return ""
 	}
-	if m.visible && !m.dom {
-		if s := m.pic.View().Content; s != "" {
+	if (m.visible || m.kept) && !m.dom {
+		if s := m.pic.View(); s != "" {
 			return s
 		}
 	}
@@ -325,6 +346,9 @@ func (m *Model) mediaView() string {
 		label := "ntvideo: " + string(m.status.State)
 		if m.status.Err != nil {
 			label = "video unavailable"
+			if errors.Is(m.status.Err, ErrUnsupported) {
+				label = "install mpv to play video"
+			}
 		}
 		if len(label) > r.Cols {
 			label = label[:r.Cols]
@@ -334,9 +358,9 @@ func (m *Model) mediaView() string {
 	return strings.Join(lines, "\n")
 }
 
-// Close always releases media resources, including after Program.Run returns.
-// To delete Kitty resources while Tea is still running, use Shutdown before Quit.
-func (m *Model) Close() error {
+// Release stops media resources without terminal output. It is safe after
+// Program.Run returns. Use Close or Keep before quitting to finish presentation.
+func (m *Model) Release() error {
 	if m.closed {
 		return nil
 	}
@@ -345,4 +369,42 @@ func (m *Model) Close() error {
 	m.status.State = Closed
 	return m.engine.close()
 }
-func (m *Model) Shutdown() tea.Cmd { _ = m.Close(); return m.pic.SetImage(nil) }
+
+// Close releases media immediately and returns terminal cleanup. Execute the
+// command before tea.Quit and continue forwarding late messages to Update.
+func (m *Model) Close() tea.Cmd {
+	_ = m.Release()
+	return tea.Batch(m.flushPictureCommands(), m.pic.Close())
+}
+
+// Shutdown is an alias for Close.
+func (m *Model) Shutdown() tea.Cmd { return m.Close() }
+
+// Keep stops media and retains the last presented frame on the current screen.
+func (m *Model) Keep() tea.Cmd {
+	_ = m.Release()
+	m.kept = true
+	return tea.Batch(m.flushPictureCommands(), m.pic.Keep())
+}
+
+// KeepOnMainScreen retains the frame when the host leaves the alternate screen.
+// Include View in the final main-screen view and sequence this command before Quit.
+func (m *Model) KeepOnMainScreen() tea.Cmd {
+	_ = m.Release()
+	m.kept = true
+	return tea.Batch(m.flushPictureCommands(), m.pic.KeepOnMainScreen())
+}
+func (m *Model) flushPictureCommands() tea.Cmd {
+	cmds := m.pictureCommands
+	m.pictureCommands = nil
+	return tea.Batch(cmds...)
+}
+
+// Session is shared with the host when WithTerminalSession is supplied.
+func (m *Model) Session() *ntpicture.TerminalSession { return m.pic.Session() }
+func (m *Model) Position() time.Duration             { return m.status.CurrentTime }
+func (m *Model) Duration() time.Duration             { return m.status.Duration }
+
+func (m *Model) Closed() bool           { return m.closed }
+func (m *Model) Visible() bool          { return m.visible }
+func (m *Model) Size() (cols, rows int) { return m.cfg.bounds.Cols, m.cfg.bounds.Rows }

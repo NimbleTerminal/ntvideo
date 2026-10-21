@@ -45,7 +45,9 @@ function mount(id, video, description, transcript, zIndex) {
   }
   document.body.append(root);
   let bounds = null, closed = false, raf = 0, lastState = '';
-  const hide = () => { root.hidden = true; root.inert = true; };
+  const hide = () => { root.hidden = true; root.inert = true; if (!video.paused) video.pause(); };
+  const visibilityChanged = () => { if (document.hidden) hide(); };
+  document.addEventListener('visibilitychange', visibilityChanged);
   function paint() {
     if (closed) return;
     let m;
@@ -71,7 +73,7 @@ function mount(id, video, description, transcript, zIndex) {
   const surface = {
     layout(x,y,cols,rows,visible) {bounds={x,y,cols,rows,visible};},
     status(state) {if(state!==lastState){status.textContent=`${description}: ${state}`;lastState=state;}},
-    close() {if(closed)return;closed=true;cancelAnimationFrame(raf);video.pause();root.remove();host.surfaces.delete(surface);}
+    close() {if(closed)return;closed=true;cancelAnimationFrame(raf);document.removeEventListener('visibilitychange',visibilityChanged);video.pause();root.remove();host.surfaces.delete(surface);}
   };
   host.surfaces.add(surface); hide();raf=requestAnimationFrame(paint);
   return surface;
