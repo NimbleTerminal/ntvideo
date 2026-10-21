@@ -60,7 +60,7 @@ func New(options ...Option) *Model {
 	m := &Model{id: id, cfg: c, visible: true, dom: Capabilities().DOM, engine: &engine{cfg: c}, status: Status{State: Idle, Volume: c.volume, Muted: c.muted}}
 	m.pic = ntpicture.New(ntpicture.Options{Session: c.session, NextID: c.nextID, AutoMode: true, StableID: true, Render: ntpicture.Config{Fit: c.fit.pictureFit(), KittyMedium: c.kittyMedium, MaxRasterPixels: 960 * 540}})
 	if !m.dom {
-		m.pictureCommands = append(m.pictureCommands, m.pic.SetMode(c.renderMode.pictureMode()))
+		m.pictureCommands = append(m.pictureCommands, m.applyRenderMode())
 	}
 	r := mediaBounds(c)
 	m.pic.SetSize(r.Cols, r.Rows)
@@ -236,6 +236,9 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	pictureCmd := tea.Batch(m.flushPictureCommands(), m.pic.Update(msg))
 	if m.closed {
 		return pictureCmd
+	}
+	if !m.dom && m.cfg.renderMode == RenderRaster {
+		pictureCmd = tea.Batch(pictureCmd, m.applyRenderMode())
 	}
 	m.updateScrubber(msg)
 	switch msg := msg.(type) {

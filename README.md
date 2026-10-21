@@ -71,7 +71,9 @@ task video -- -render raster '/path/to/video.ogg'
 ```
 
 Press **r** in the native player to cycle auto → glyph → raster. Raster requires
-a Kitty-graphics-compatible terminal. The status shows the requested mode and
+a Kitty-graphics-compatible terminal. While detection is pending, video stays
+in glyph mode and switches automatically when support is confirmed. Unsupported
+terminals keep glyph playback without a playback error. The status shows the requested mode and
 active transport. Switching also redraws a paused frame.
 
 Hosts can use `WithRenderMode(ntvideo.RenderGlyph)` at construction, or return

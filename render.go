@@ -6,13 +6,13 @@ import (
 )
 
 // RenderMode selects native terminal presentation. Browsers always use their
-// HTML video surface. Raster requires a Kitty-graphics-compatible terminal.
+// HTML video surface. Raster uses glyphs until Kitty graphics support is confirmed.
 type RenderMode int8
 
 const (
 	RenderAuto   RenderMode = iota // Detect Kitty graphics; otherwise use half-block glyphs.
 	RenderGlyph                    // Always use ANSI half-block glyphs.
-	RenderRaster                   // Request Kitty raster graphics explicitly.
+	RenderRaster                   // Prefer Kitty raster graphics, waiting for detection if needed.
 )
 
 func normalizeRenderMode(mode RenderMode) RenderMode {
@@ -61,5 +61,19 @@ func (m *Model) SetRenderMode(mode RenderMode) tea.Cmd {
 	}
 	m.epoch++
 	m.transport = ""
-	return m.pic.SetMode(mode.pictureMode())
+	return m.applyRenderMode()
+}
+
+// applyRenderMode keeps a raster request pending in glyph mode while discovery
+// is unresolved or unsupported. Update rechecks the shared session snapshot;
+// an old notification must never override a newer capability or user choice.
+func (m *Model) applyRenderMode() tea.Cmd {
+	mode := m.cfg.renderMode.pictureMode()
+	if m.cfg.renderMode == RenderRaster && m.pic.KittySupported() != ntpicture.KittyCapabilitySupported {
+		mode = ntpicture.PictureGlyph
+	}
+	if mode == m.pic.Mode() && !m.pic.AutoMode() {
+		return nil
+	}
+	return m.pic.SetMode(mode)
 }
