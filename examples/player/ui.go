@@ -153,6 +153,10 @@ func (m *model) activate(action string) tea.Cmd {
 		m.v.Seek(m.v.Status().CurrentTime - 5*time.Second)
 	case "forward":
 		m.v.Seek(m.v.Status().CurrentTime + 5*time.Second)
+	case "render":
+		if !ntvideo.Capabilities().DOM {
+			return m.v.SetRenderMode((m.v.RenderMode() + 1) % 3)
+		}
 	case "fit":
 		return m.v.SetFit((m.v.Fit() + 1) % 3)
 	case "size":
@@ -241,6 +245,9 @@ func (m *model) View() tea.View {
 		state += " " + transport
 	}
 	hint := state + "  ·  f fit  ·  enter size  ·  q quit"
+	if !ntvideo.Capabilities().DOM {
+		hint = state + "  ·  r " + m.v.RenderMode().String() + "  ·  f fit  ·  enter size  ·  q quit"
+	}
 	if err := m.v.Status().Err; err != nil {
 		hint = ansi.Strip(err.Error())
 	}

@@ -60,6 +60,24 @@ The example already does this. Unknown durations disable seeking; small widths
 omit timestamps. Hiding or resizing the widget cancels an active drag. Browser
 native controls remain available for accessible media interaction.
 
+## Glyph or raster rendering
+
+Native rendering defaults to `auto`: Kitty raster graphics when detected,
+otherwise ANSI half-block glyphs. Choose a mode on startup:
+
+```sh
+task video -- -render glyph '/path/to/video.mp4'
+task video -- -render raster '/path/to/video.ogg'
+```
+
+Press **r** in the native player to cycle auto → glyph → raster. Raster requires
+a Kitty-graphics-compatible terminal. The status shows the requested mode and
+active transport. Switching also redraws a paused frame.
+
+Hosts can use `WithRenderMode(ntvideo.RenderGlyph)` at construction, or return
+`v.SetRenderMode(ntvideo.RenderRaster)` from Update. `RenderAuto` restores
+detection. These options affect native terminals; browsers use HTML video.
+
 ## Host integration and lifecycle
 
 Playback starts **paused on the first frame, with sound enabled**. The host owns

@@ -66,6 +66,7 @@ func Capabilities() CapabilitySet { return platformCapabilities() }
 type config struct {
 	scrubber                      bool
 	fit                           FitMode
+	renderMode                    RenderMode
 	source                        Source
 	bounds                        CellRect
 	volume                        float64

@@ -114,3 +114,15 @@ func TestPanelFitsWindowAndControls(t *testing.T) {
 		m.v.Close()
 	}
 }
+
+func TestRenderKeyCyclesModesWithoutChangingLayout(t *testing.T) {
+	m := &model{v: ntvideo.New()}
+	defer m.v.Close()
+	bounds := m.v.Bounds()
+	for _, want := range []ntvideo.RenderMode{ntvideo.RenderGlyph, ntvideo.RenderRaster, ntvideo.RenderAuto} {
+		m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+		if m.v.RenderMode() != want || m.v.Bounds() != bounds {
+			t.Fatal("render key changed layout or selected wrong mode")
+		}
+	}
+}

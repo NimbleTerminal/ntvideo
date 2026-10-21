@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -33,6 +34,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			layout = m.activate("play")
 		case "enter":
 			layout = m.activate("size")
+		case "r":
+			layout = m.activate("render")
 		case "f":
 			layout = m.activate("fit")
 		case "left":
@@ -53,11 +56,28 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(layout, mouse, update)
 }
 func main() {
-	source := "demo.mp4"
-	if len(os.Args) > 1 {
-		source = os.Args[1]
+	render := flag.String("render", "auto", "native rendering: auto, glyph, or raster (Kitty graphics)")
+	flag.Parse()
+	mode := ntvideo.RenderAuto
+	switch *render {
+	case "auto":
+	case "glyph":
+		mode = ntvideo.RenderGlyph
+	case "raster":
+		mode = ntvideo.RenderRaster
+	default:
+		fmt.Fprintln(os.Stderr, "invalid -render: use auto, glyph, or raster")
+		os.Exit(2)
 	}
-	v := ntvideo.New(ntvideo.WithSource(source), ntvideo.WithScrubber(true), ntvideo.WithWidth(60), ntvideo.WithHeight(20), ntvideo.WithDescription("Video demonstration"))
+	if flag.NArg() > 1 {
+		fmt.Fprintln(os.Stderr, "usage: player [-render auto|glyph|raster] [video]")
+		os.Exit(2)
+	}
+	source := "demo.mp4"
+	if flag.NArg() > 0 {
+		source = flag.Arg(0)
+	}
+	v := ntvideo.New(ntvideo.WithRenderMode(mode), ntvideo.WithSource(source), ntvideo.WithScrubber(true), ntvideo.WithWidth(60), ntvideo.WithHeight(20), ntvideo.WithDescription("Video demonstration"))
 	defer v.Close()
 	v.Focus()
 	m := &model{v: v, expanded: true, source: source}
