@@ -46,6 +46,14 @@ type Track struct {
 	Selected            bool
 }
 type Status struct {
+	// CaptionCuesAvailable reports a loaded timestamped timeline for the selected
+	// track when WithCaptionEvents is enabled. Cue errors do not stop playback.
+	CaptionCuesAvailable bool
+	CaptionCueErr        error
+	cueData              *cueSnapshot
+	// CaptionText is the current plain subtitle text from the native backend.
+	// Bitmap subtitles and browser playback do not supply text here.
+	CaptionText                string
 	State                      State
 	CurrentTime, Duration      time.Duration
 	Volume                     float64 // 0..1
@@ -72,6 +80,8 @@ type config struct {
 	volume                        float64
 	muted, loop, autoplay         bool
 	nativeControls                bool
+	nativeCaptionOverlay          bool
+	captionEvents                 bool
 	host, description, transcript string
 	z                             int
 	poster                        image.Image

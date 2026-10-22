@@ -80,6 +80,17 @@ func (m *model) toggleMute() {
 }
 func (m *model) syncControls() {
 	s := m.v.Status()
+	if m.captionPending {
+		selected := ""
+		for _, track := range s.CaptionTracks {
+			if track.Selected {
+				selected = track.ID
+			}
+		}
+		if selected == m.desiredCaption || s.Err != nil {
+			m.captionPending = false
+		}
+	}
 	if math.Abs(s.Volume-m.desiredVolume) < 0.001 {
 		m.volumePending = false
 	}
@@ -121,7 +132,11 @@ func (m *model) controlRows() (string, string, []hit) {
 	if m.expanded {
 		size = "Small"
 	}
-	buttons := [][2]string{{play, "play"}, {"-5s", "back"}, {"+5s", "forward"}, {m.v.Fit().String(), "fit"}, {size, "size"}}
+	cc := "CC off"
+	if m.selectedCaption() != "" {
+		cc = "CC on"
+	}
+	buttons := [][2]string{{play, "play"}, {"-5s", "back"}, {"+5s", "forward"}, {m.v.Fit().String(), "fit"}, {size, "size"}, {cc, "captions"}}
 	controls := row(p.y+p.rows+4, buttons)
 	mute := "Mute"
 	if m.mutedValue() {
@@ -143,6 +158,8 @@ func (m *model) controlRows() (string, string, []hit) {
 }
 func (m *model) activate(action string) tea.Cmd {
 	switch action {
+	case "captions":
+		return m.openCaptions()
 	case "play":
 		if m.v.Status().State == ntvideo.Playing || m.v.Status().State == ntvideo.Buffering {
 			m.v.Pause()
@@ -181,6 +198,9 @@ func (m *model) volumeAt(x int) {
 	}
 }
 func (m *model) mouse(msg tea.Msg) tea.Cmd {
+	if m.captionMenu {
+		return nil
+	}
 	switch msg := msg.(type) {
 	case tea.MouseClickMsg:
 		if msg.Button != tea.MouseLeft {
@@ -214,6 +234,9 @@ func (m *model) mouse(msg tea.Msg) tea.Cmd {
 	return nil
 }
 func (m *model) View() tea.View {
+	if m.captionMenu {
+		return m.captionView()
+	}
 	p := m.panel()
 	if p.compact {
 		v := tea.NewView(pad("Resize to at least 28×12", m.width))
@@ -230,6 +253,12 @@ func (m *model) View() tea.View {
 	if name == "." || name == "" {
 		name = "Video"
 	}
+	if m.cueEvents {
+		name += fmt.Sprintf(" · cue events %d", m.cueCount)
+		if err := m.v.Status().CaptionCueErr; err != nil {
+			name += " · cue data unavailable"
+		}
+	}
 	lines := []string{title, side(" " + tint(ink, name)), rule("├", "┤")}
 	// Never recolor the picture content: Kitty embeds its image ID in foreground RGB.
 	videoLines := strings.Split(m.v.View(), "\n")
@@ -244,9 +273,13 @@ func (m *model) View() tea.View {
 	if transport := m.v.Transport(); transport != "" {
 		state += " " + transport
 	}
-	hint := state + "  ·  f fit  ·  enter size  ·  q quit"
+	hint := state + "  ·  c CC  ·  C tracks  ·  f fit  ·  enter size  ·  q quit"
 	if !ntvideo.Capabilities().DOM {
-		hint = state + "  ·  r " + m.v.RenderMode().String() + "  ·  f fit  ·  enter size  ·  q quit"
+		captions := "backend"
+		if m.v.NativeCaptionOverlay() {
+			captions = "text"
+		}
+		hint = state + "  ·  c CC  ·  C tracks  ·  t " + captions + "  ·  r " + m.v.RenderMode().String() + "  ·  f fit  ·  enter size  ·  q quit"
 	}
 	if err := m.v.Status().Err; err != nil {
 		hint = ansi.Strip(err.Error())

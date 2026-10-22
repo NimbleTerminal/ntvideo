@@ -18,6 +18,8 @@ class Video {
  setAttribute(k,v){this.attrs[k]=v;}
  removeAttribute(k){delete this[k];delete this.attrs[k];}
  appendChild(t){this.children.push(t);}
+ addEventListener(k,f){(this.listeners??={})[k]=f;}
+ removeEventListener(k,f){if(this.listeners?.[k]===f)delete this.listeners[k];}
  load(){this.networkState=this.src?1:0;}
  pause(){this.paused=true;}
  play(){if(globalThis.playRejection)return Promise.reject(globalThis.playRejection);this.paused=false;return Promise.resolve();}
@@ -41,6 +43,84 @@ func setupDOM(t *testing.T) {
 	})
 }
 func sampleDOM(m *Model) { m.Update(m.sample()()) }
+
+func TestDOMCaptionCueTimeline(t *testing.T) {
+	setupDOM(t)
+	m := New(WithSource("movie.mp4"), WithCaptionEvents(true))
+	defer m.Close()
+	sampleDOM(m)
+	v := domVideo(t, m)
+	v.Set("textTracks", js.Global().Call("eval", `[{label:'English',language:'en',kind:'captions',mode:'showing',cues:[{startTime:0.1,endTime:0.15,text:'same'},{startTime:0.15,endTime:0.2,text:'same'},{startTime:1,endTime:2,text:'destination'}]}]`))
+	sample := func() []CaptionCueMsg { return collectCueCommands(m.Update(m.sample()())) }
+	sample()
+	if !m.Status().CaptionCuesAvailable {
+		t.Fatalf("missing timeline: %+v", m.Status())
+	}
+	v.Set("currentTime", 0.5)
+	if events := sample(); len(events) != 4 {
+		t.Fatal("missed short cues", events)
+	}
+	v.Get("listeners").Get("seeking").Invoke()
+	v.Set("seeking", true)
+	v.Set("currentTime", 1.5)
+	if events := sample(); len(events) != 0 {
+		t.Fatal("unsettled seek", events)
+	}
+	v.Set("seeking", false)
+	if events := sample(); len(events) != 1 || events[0].Reason != CueSeek || events[0].Cue.Text != "destination" {
+		t.Fatal(events)
+	}
+	if events := sample(); len(events) != 0 {
+		t.Fatal("paused cue repeated", events)
+	}
+	m.SelectCaptionTrack("")
+	if events := sample(); len(events) != 1 || events[0].Kind != CueExit || events[0].Reason != CueTrackChange {
+		t.Fatal(events)
+	}
+	if m.Status().CaptionCuesAvailable {
+		t.Fatal("off retained cue availability")
+	}
+	// Cue parsing failures do not turn an otherwise playable video into Failed.
+	v.Set("textTracks", js.Global().Call("eval", `[{label:'Bad',language:'en',kind:'captions',mode:'showing',cues:[{startTime:2,endTime:1,text:'bad'}]}]`))
+	sample()
+	if m.Status().CaptionCueErr == nil || m.Status().Err != nil || m.Status().State == Failed {
+		t.Fatalf("cue error affected playback: %+v", m.Status())
+	}
+	m.Close()
+	if !v.Get("listeners").Get("seeking").IsUndefined() {
+		t.Fatal("listener leaked")
+	}
+}
+
+func TestDOMCaptionTracks(t *testing.T) {
+	setupDOM(t)
+	m := New(WithNativeControls(false), WithMedia(Source{URL: "movie.mp4", Captions: []Caption{{Source: "en.vtt", Label: "English", Language: "en", Default: true}, {Source: "es.vtt", Label: "Spanish", Language: "es"}}}))
+	defer m.Close()
+	sampleDOM(m)
+	v := domVideo(t, m)
+	children := v.Get("children")
+	if children.Length() != 2 || children.Index(0).Get("src").String() != "en.vtt" || !children.Index(0).Get("default").Bool() || children.Index(1).Get("srclang").String() != "es" {
+		t.Fatal("caption elements missing metadata")
+	}
+	// The fixture supplies the browser's resulting TextTrackList.
+	v.Set("textTracks", js.Global().Call("eval", `[{label:'English',language:'en',kind:'captions',mode:'showing'},{label:'Spanish',language:'es',kind:'captions',mode:'disabled'}]`))
+	for _, id := range []string{"1", "", "0"} {
+		m.SelectCaptionTrack(id)
+		sampleDOM(m)
+		tracks := m.Status().CaptionTracks
+		if len(tracks) != 2 {
+			t.Fatal(tracks)
+		}
+		for _, track := range tracks {
+			if track.Selected != (track.ID == id) {
+				t.Fatalf("selection %q: %+v", id, tracks)
+			}
+		}
+	}
+	if err := m.engine.b.SelectTrack("captions", "99"); err == nil {
+		t.Fatal("invalid track accepted")
+	}
+}
 func domVideo(t *testing.T, m *Model) js.Value {
 	t.Helper()
 	b, ok := m.engine.b.(*domBackend)

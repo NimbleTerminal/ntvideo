@@ -11,8 +11,15 @@ try{
  browser=await chromium.launch({channel:process.env.CHROME_CHANNEL||'chrome',headless:true});
  const page=await browser.newPage({viewport:{width:1000,height:800}});
  const errors=[];page.on('pageerror',e=>errors.push(e.stack));
+ const cueEvents=[];page.on('console',msg=>{if(msg.text().startsWith('ntvideo cue '))cueEvents.push(JSON.parse(msg.text().slice('ntvideo cue '.length)));});
+ const waitCue=async predicate=>{
+   const deadline=Date.now()+5000;
+   while(!cueEvents.some(predicate)&&Date.now()<deadline)await page.waitForTimeout(25);
+   assert.ok(cueEvents.some(predicate),JSON.stringify(cueEvents));
+ };
  const source=process.env.NTVIDEO_BROWSER_SOURCE || "demo.mp4";
- await page.goto(`http://127.0.0.1:${server.address().port}/index.html?source=${encodeURIComponent(source)}`);
+ await page.route('**/captions-*.vtt',route=>route.fulfill({contentType:'text/vtt',body:'WEBVTT\n\n00:00.000 --> 00:04.000\nCaption test\n'}));
+ await page.goto(`http://127.0.0.1:${server.address().port}/index.html?source=${encodeURIComponent(source)}&captions=captions-en.vtt&captions=captions-es.vtt&cue-events=1`);
  await page.waitForFunction(()=>{const v=document.querySelector('video');return v&&v.readyState>=2&&!v.parentElement.hidden;},null,{timeout:20000});
  const controlState=await page.evaluate(()=>{
    const v=document.querySelector('video');
@@ -28,6 +35,27 @@ try{
  await page.keyboard.press('Space');
  await page.waitForFunction(()=>document.querySelector('video').paused);
  assert.equal(await page.evaluate(()=>document.activeElement?.tagName==='VIDEO'),false);
+ // Host-owned caption controls select real browser TextTracks and load cues.
+ await page.keyboard.press('c');
+ await page.waitForFunction(()=>{const t=document.querySelector('video').textTracks;return t.length===2&&t[0].mode==='showing'&&t[0].cues?.length>0;});
+ await waitCue(e=>e.Kind==='enter'&&e.Cue.TrackID==='0'&&e.Cue.Text==='Caption test');
+ await page.keyboard.press('c');
+ await page.waitForFunction(()=>[...document.querySelector('video').textTracks].every(t=>t.mode==='disabled'));
+ await page.keyboard.press('Space');
+ await page.waitForFunction(()=>!document.querySelector('video').paused);
+ await page.keyboard.press('C');
+ await page.waitForFunction(()=>{const v=document.querySelector('video');return v.paused&&v.parentElement.hidden;});
+ await page.keyboard.press('ArrowDown');
+ await page.keyboard.press('ArrowDown');
+ await page.keyboard.press('Enter');
+ await page.waitForFunction(()=>{const v=document.querySelector('video');return !v.parentElement.hidden&&v.textTracks[1].mode==='showing'&&v.textTracks[0].mode==='disabled';});
+ assert.equal(await page.evaluate(()=>document.querySelector('video').paused),true);
+ await page.keyboard.press('c');
+ await page.waitForFunction(()=>[...document.querySelector('video').textTracks].every(t=>t.mode==='disabled'));
+ await page.keyboard.press('c');
+ await page.waitForFunction(()=>document.querySelector('video').textTracks[1].mode==='showing');
+ await waitCue(e=>e.Kind==='exit'&&e.Reason==='track-change');
+ await waitCue(e=>e.Kind==='enter'&&e.Cue.TrackID==='1');
  // The example starts expanded. Verify width, then switch to the small player.
  const cells=await page.evaluate(()=>{const v=document.querySelector('video').getBoundingClientRect(),c=document.querySelector('#terminal canvas').getBoundingClientRect();return {width:v.left-c.left,height:(v.top-c.top)/3};});
  assert.ok(cells.width>0&&cells.height>0);

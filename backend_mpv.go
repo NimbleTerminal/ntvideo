@@ -31,6 +31,8 @@ type mpvBackend struct {
 	captions         []Caption
 	tracksAt         time.Time
 	audio, subtitles []Track
+	cueFiles         map[string]nativeCueFile
+	cueSeekSerial    uint64
 }
 
 func platformCapabilities() CapabilitySet {
@@ -52,6 +54,9 @@ func newBackend(c config) (backend, error) {
 	// youtube-dl hook, which would otherwise run an external program for URLs.
 	// Without an audio device, play silently instead of failing.
 	opts := [][2]string{{"config", "no"}, {"input-default-bindings", "no"}, {"input-vo-keyboard", "no"}, {"osc", "no"}, {"access-references", "no"}, {"demuxer-lavf-o", "protocol_whitelist=file"}, {"stream-lavf-o", "protocol_whitelist=file"}, {"sub-auto", "no"}, {"audio-file-auto", "no"}, {"terminal", "no"}, {"load-scripts", "no"}, {"ytdl", "no"}, {"vo", "libmpv"}, {"hwdec", "auto-copy"}, {"keep-open", "yes"}, {"idle", "yes"}, {"pause", "yes"}, {"audio-display", "no"}, {"osd-level", "0"}, {"audio-fallback-to-null", "yes"}}
+	if c.nativeCaptionOverlay {
+		opts = append(opts, [2]string{"sub-visibility", "no"})
+	}
 	for _, o := range opts {
 		if err := b.option(o[0], o[1]); err != nil {
 			b.destroy()
@@ -98,13 +103,18 @@ func (b *mpvBackend) option(name, value string) error {
 func (b *mpvBackend) property(name, value string) error {
 	return b.set("mpv_set_property_string", name, value)
 }
-func (b *mpvBackend) command(a, arg, c string) error {
-	if strings.ContainsRune(arg, 0) || strings.ContainsRune(c, 0) {
-		return errors.New("ntvideo: invalid source or track")
+func (b *mpvBackend) command(a, arg, c string, extra ...string) error {
+	values := []string{a, arg}
+	if c != "" || len(extra) > 0 {
+		values = append(values, c)
 	}
-	args := []*byte{cstring(a), cstring(arg), nil, nil}
-	if c != "" {
-		args[2] = cstring(c)
+	values = append(values, extra...)
+	args := make([]*byte, len(values)+1)
+	for i, value := range values {
+		if strings.ContainsRune(value, 0) {
+			return errors.New("ntvideo: invalid source or track")
+		}
+		args[i] = cstring(value)
 	}
 	ptr := unsafe.Pointer(&args[0])
 	code := b.lib.fn("mpv_command").integer(unsafe.Pointer(&b.handle), unsafe.Pointer(&ptr))
@@ -144,13 +154,23 @@ func (b *mpvBackend) Load(s Source) error {
 		return err
 	}
 	s.URL = path
+	files := map[string]nativeCueFile{}
 	for i := range s.Captions {
 		path, err := validateLocalFile(s.Captions[i].Source, b.cfg.limits)
 		if err != nil {
 			return err
 		}
 		s.Captions[i].Source = path
+		if b.cfg.captionEvents {
+			// Bound aggregate parser memory as well as each sidecar.
+			if len(files) >= 16 {
+				files[path] = nativeCueFile{err: errors.New("ntvideo: cue events support at most 16 sidecars")}
+				continue
+			}
+			files[path] = readCueFile(path)
+		}
 	}
+	b.cueFiles = files
 	b.loading = true
 	b.loaded = false
 	b.seekPending = false
@@ -200,6 +220,17 @@ func (b *mpvBackend) SelectTrack(kind, id string) error {
 	b.tracksAt = time.Time{}
 	return b.property(name, id)
 }
+func (b *mpvBackend) setCaptionOverlay(enabled bool) error {
+	visibility := "yes"
+	if enabled {
+		visibility = "no"
+	}
+	if err := b.property("sub-visibility", visibility); err != nil {
+		return err
+	}
+	b.clearFrame()
+	return nil
+}
 func (b *mpvBackend) Layout(_ CellRect, visible bool) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -224,6 +255,9 @@ func (b *mpvBackend) Poll() (Status, error) {
 		if ev.ID == 0 {
 			break
 		}
+		if ev.ID == 20 && !b.cfg.loop {
+			b.cueSeekSerial++
+		} // Model.Seek marks explicit seeks; automatic native loops remain playback.
 		code := ev.Error
 		reason := int32(-1)
 		if ev.ID == 7 && ev.Data != nil {
@@ -254,7 +288,7 @@ func (b *mpvBackend) Poll() (Status, error) {
 				if c.Default {
 					mode = "select"
 				}
-				if err := b.command("sub-add", c.Source, mode); err != nil {
+				if err := b.command("sub-add", c.Source, mode, c.Label, c.Language); err != nil {
 					eventErr = err
 				}
 			}
@@ -312,6 +346,10 @@ func (b *mpvBackend) Poll() (Status, error) {
 	}
 	s.AudioTracks = append([]Track(nil), b.audio...)
 	s.CaptionTracks = append([]Track(nil), b.subtitles...)
+	b.captionSnapshot(&s)
+	if b.loaded && !b.seekPending {
+		s.CaptionText = captionPlainText(b.text("sub-text"))
+	}
 	b.mu.Lock()
 	renderErr := b.renderErr
 	b.renderErr = nil

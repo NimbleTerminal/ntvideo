@@ -19,6 +19,10 @@ type domBackend struct {
 	mu             sync.Mutex
 	asyncErr       error
 	closed         bool
+	cueCache       domCueCache
+	cueSeekSerial  uint64
+	cueSeeking     js.Func
+	cueListening   bool
 }
 
 // Prefer the current bridge; older host pages can keep the legacy global.
@@ -86,6 +90,12 @@ func newBackend(c config) (b backend, err error) {
 }
 func (b *domBackend) Load(s Source) error {
 	return jsTry(func() {
+		b.cueCache = domCueCache{}
+		if b.cfg.captionEvents && !b.cueListening {
+			b.cueSeeking = js.FuncOf(func(js.Value, []js.Value) any { b.cueSeekSerial++; return nil })
+			b.video.Call("addEventListener", "seeking", b.cueSeeking)
+			b.cueListening = true
+		}
 		b.video.Call("pause")
 		b.video.Set("textContent", "")
 		for _, c := range s.Captions {
@@ -206,6 +216,7 @@ func (b *domBackend) Poll() (s Status, err error) {
 				}
 			}
 		}
+		b.captionSnapshot(&s)
 		b.surface.Call("status", string(s.State))
 	})
 	b.mu.Lock()
@@ -226,6 +237,11 @@ func (b *domBackend) Close() error {
 	b.closed = true
 	b.mu.Unlock()
 	return jsTry(func() {
+		if b.cueListening {
+			defer b.cueSeeking.Release()
+			b.cueListening = false
+			b.video.Call("removeEventListener", "seeking", b.cueSeeking)
+		}
 		b.video.Call("pause")
 		b.video.Call("removeAttribute", "src")
 		b.video.Set("textContent", "")

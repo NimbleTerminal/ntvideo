@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## Unreleased
+
+ * Add opt-in timestamped caption enter/exit events with seek, track-change, load, and close reasons. Support native SRT/WebVTT sidecars and loaded browser text tracks, with bounded parsing and a demo event counter.
+ * Add native terminal-text captions over glyph or Kitty video, enabled with `-caption-render text` or the player's **t** key. Expose active native cue text through `Status.CaptionText`.
+ * Add caption toggle and track menu to the player, with subtitle-file flags and browser WebVTT query parameters. Opening the menu pauses video without resuming on close.
+ * Preserve native external-caption labels and languages; test native and browser caption selection and disabling.
+
 ## v0.2.0 (2026-10-21)
 
  * Migrate to `ntpicture` with shared terminal sessions and image IDs; update dependencies, including Booba. **API change:** `Model.Close` now returns `tea.Cmd`; use `Release` for media-only teardown.

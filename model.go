@@ -35,11 +35,16 @@ type Model struct {
 	waitGeneration                          uint64
 	pictureCommands                         []tea.Cmd
 	kept                                    bool
+	cues                                    cueScheduler
+	cueVersion, cueSource                   uint64
+	cueReason                               CueReason
+	cuePending                              []CaptionCueMsg
 }
 type sampleMsg struct {
-	id, epoch uint64
-	status    Status
-	frame     image.Image
+	id, epoch  uint64
+	status     Status
+	frame      image.Image
+	cueVersion uint64
 }
 type wakeMsg struct{ id uint64 }
 
@@ -78,6 +83,7 @@ func (m *Model) Status() Status {
 	s := m.status
 	s.AudioTracks = append([]Track(nil), s.AudioTracks...)
 	s.CaptionTracks = append([]Track(nil), s.CaptionTracks...)
+	s.cueData = nil
 	return s
 }
 func (m *Model) Bounds() CellRect { return m.cfg.bounds }
@@ -95,6 +101,8 @@ func (m *Model) Seek(t time.Duration) {
 		return
 	}
 	t = max(0, t)
+	m.resetCues(CueSeek)
+	m.status.CaptionText = ""
 	m.epoch++
 	m.pictureCommands = append(m.pictureCommands, m.pic.Stop())
 	m.engine.enqueue(func(b backend) error { return b.Seek(t) })
@@ -109,6 +117,11 @@ func (m *Model) SelectAudioTrack(id string) { m.selectTrack("audio", id) }
 // An empty caption ID turns captions off.
 func (m *Model) SelectCaptionTrack(id string) { m.selectTrack("captions", id) }
 func (m *Model) selectTrack(kind, id string) {
+	if kind == "captions" {
+		m.resetCues(CueTrackChange)
+		m.status.CaptionText = ""
+		m.epoch++
+	}
 	m.engine.enqueue(func(b backend) error { return b.SelectTrack(kind, id) })
 }
 
@@ -119,7 +132,10 @@ func (m *Model) Load(s Source) {
 		return
 	}
 	s = cloneSource(s)
+	m.resetCues(CueLoad)
+	m.cueSource++
 	m.cfg.source = s
+	m.status.CaptionText = ""
 	m.scrubbing = false
 	m.epoch++
 	if s.URL == "" {
@@ -205,7 +221,11 @@ func (m *Model) sample() tea.Cmd {
 	if !m.visible || r.Cols == 0 || r.Rows == 0 {
 		w, h = 0, 0
 	}
-	return func() tea.Msg { s, img := e.sample(w, h); return sampleMsg{id, epoch, s, img} }
+	cueVersion := m.cueVersion
+	return func() tea.Msg {
+		s, img := e.sample(w, h)
+		return sampleMsg{id: id, epoch: epoch, status: s, frame: img, cueVersion: cueVersion}
+	}
 }
 func (m *Model) next() tea.Cmd {
 	m.busy = false
@@ -221,7 +241,7 @@ func (m *Model) next() tea.Cmd {
 	return tea.Tick(interval, func(time.Time) tea.Msg { return wakeMsg{id} })
 }
 func statusEqual(a, b Status) bool {
-	return a.State == b.State && a.CurrentTime == b.CurrentTime && a.Duration == b.Duration &&
+	return a.CaptionCuesAvailable == b.CaptionCuesAvailable && errorEqual(a.CaptionCueErr, b.CaptionCueErr) && a.CaptionText == b.CaptionText && a.State == b.State && a.CurrentTime == b.CurrentTime && a.Duration == b.Duration &&
 		a.Volume == b.Volume && a.Muted == b.Muted && errorEqual(a.Err, b.Err) &&
 		slices.Equal(a.AudioTracks, b.AudioTracks) && slices.Equal(a.CaptionTracks, b.CaptionTracks)
 }
@@ -231,7 +251,12 @@ func errorEqual(a, b error) bool {
 	}
 	return a == b || a.Error() == b.Error()
 }
-func (m *Model) Update(msg tea.Msg) tea.Cmd {
+func (m *Model) Update(msg tea.Msg) (cmd tea.Cmd) {
+	defer func() {
+		if events := m.flushCueEvents(); events != nil {
+			cmd = tea.Sequence(events, cmd)
+		}
+	}()
 	// Even closed pictures must receive late preparation/retirement messages.
 	pictureCmd := tea.Batch(m.flushPictureCommands(), m.pic.Update(msg))
 	if m.closed {
@@ -251,6 +276,15 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if msg.id != m.id {
 			return pictureCmd
 		}
+		if msg.epoch != m.epoch {
+			// A sample from before a seek/load/track change must not restore an old cue.
+			msg.status.CaptionText = ""
+		}
+		if m.cfg.captionEvents && m.cfg.source.URL != "" && msg.cueVersion == m.cueVersion && msg.status.cueData != nil {
+			m.queueCueEvents(m.cues.observe(msg.status.cueData, msg.status.CurrentTime, msg.status.Duration, m.cueReason, m.cfg.loop))
+			m.cueReason = ""
+		}
+		msg.status.cueData = nil
 		var event tea.Cmd
 		if !statusEqual(m.status, msg.status) {
 			event = func() tea.Msg { return EventMsg{m.ID(), msg.status} }
@@ -341,6 +375,9 @@ func (m *Model) mediaView() string {
 	}
 	if (m.visible || m.kept) && !m.dom {
 		if s := m.pic.View(); s != "" {
+			if m.cfg.nativeCaptionOverlay {
+				return overlayCaptions(s, m.status.CaptionText, r.Cols, r.Rows)
+			}
 			return s
 		}
 	}
@@ -370,6 +407,7 @@ func (m *Model) Release() error {
 	if m.closed {
 		return nil
 	}
+	m.resetCues(CueClose)
 	m.closed = true
 	m.epoch++
 	m.status.State = Closed
@@ -380,7 +418,7 @@ func (m *Model) Release() error {
 // command before tea.Quit and continue forwarding late messages to Update.
 func (m *Model) Close() tea.Cmd {
 	_ = m.Release()
-	return tea.Batch(m.flushPictureCommands(), m.pic.Close())
+	return tea.Sequence(m.flushCueEvents(), tea.Batch(m.flushPictureCommands(), m.pic.Close()))
 }
 
 // Shutdown is an alias for Close.
@@ -390,7 +428,7 @@ func (m *Model) Shutdown() tea.Cmd { return m.Close() }
 func (m *Model) Keep() tea.Cmd {
 	_ = m.Release()
 	m.kept = true
-	return tea.Batch(m.flushPictureCommands(), m.pic.Keep())
+	return tea.Sequence(m.flushCueEvents(), tea.Batch(m.flushPictureCommands(), m.pic.Keep()))
 }
 
 // KeepOnMainScreen retains the frame when the host leaves the alternate screen.
@@ -398,7 +436,7 @@ func (m *Model) Keep() tea.Cmd {
 func (m *Model) KeepOnMainScreen() tea.Cmd {
 	_ = m.Release()
 	m.kept = true
-	return tea.Batch(m.flushPictureCommands(), m.pic.KeepOnMainScreen())
+	return tea.Sequence(m.flushCueEvents(), tea.Batch(m.flushPictureCommands(), m.pic.KeepOnMainScreen()))
 }
 func (m *Model) flushPictureCommands() tea.Cmd {
 	cmds := m.pictureCommands

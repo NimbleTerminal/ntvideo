@@ -32,7 +32,8 @@
    delete globalThis.bubbletea_read;delete globalThis.bubbletea_write;delete globalThis.bubbletea_resize;
    if(code) console.error(`Go exited with status ${code}`);
  };
- go.argv=['player',new URLSearchParams(location.search).get('source') || 'demo.mp4'];
+ const params=new URLSearchParams(location.search);
+ go.argv=['player',...(params.get('cue-events')==='1'?['-cue-events']:[]),...params.getAll('captions').flatMap(url=>['-captions',url]),params.get('source') || 'demo.mp4'];
  const {instance}=await WebAssembly.instantiateStreaming(fetch('app.wasm'),go.importObject);
  const running=go.run(instance);
  booba.connectWasm();booba.focus();

@@ -21,6 +21,9 @@ MIGRATING.md for v0.2.0 compatibility changes.
   owns that integration. Embed runtime assets only, not examples or tests.
 - Browser blob URLs belong to the host. Preserve native-control defaults and
   accessible host-owned input when `WithNativeControls(false)` is selected.
+- Caption cue events are opt-in and independent of raster/text presentation.
+  Keep source generations, stale-sample rejection, overlapping/short cues, and
+  seek/track/close reasons intact. Parsing errors must not stop video playback.
 
 ## Validation
 
