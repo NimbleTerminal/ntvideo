@@ -1,11 +1,36 @@
-# Migrating to v0.2.0
+# Migration guide
 
-## Native hosts
+## Upgrading to v0.3.0
+
+Existing method signatures are unchanged from v0.2.0. New caption, headless,
+and frame-transform APIs are optional; see the [README](README.md) for examples.
 
 - Native hosts can opt into `WithFrameTransform` and change it on the Tea loop
   with `SetFrameTransform` (nil disables it). Callbacks run off the UI loop and
   must preserve image immutability. Continue driving `Update` to redraw paused
   frames after changes. Browser playback and headless APIs are unaffected.
+- Enable `WithCaptionEvents(true)` to receive `CaptionCueMsg` on the Tea loop.
+  Keep forwarding every message to `Update` and running its returned command.
+  Native cue events support SRT/WebVTT sidecars; embedded subtitle transcripts
+  are available separately through headless `Cues`.
+- Use `WithNativeCaptionOverlay(true)` for terminal-text captions over video.
+  The default remains mpv-rendered captions. The demo's **t** key toggles this.
+- `ParseCues` parses SRT/WebVTT without media tools. Container `Cues` and `Frames`
+  use ffprobe/ffmpeg independently of libmpv; bitmap subtitles require OCR and
+  are not supported by transcript extraction.
+- `Frames` defaults to a 640×360 bounding box, at most 16 frames, and a 16 Mi pixel
+  output budget. `FrameAt` keeps source dimensions unless output limits are set,
+  but shares the output budget; use `MaxFrameWidth`/`MaxFrameHeight` for large media.
+- Native hosts can call `Seek` immediately after `Load` to restore a position.
+  The latest early seek wins; loading another source discards it. Old samples
+  no longer replace status or emit events after seek/load/caption-track changes.
+- Browser hosts should rebuild WASM and refresh assets together with
+  `go tool ntvideo-assets dist --force`. The exporter now stages complete files
+  before publishing; omitting `--force` still preserves existing files.
+
+## Migrating from v0.1.0 to v0.2.0
+
+### Native hosts
 
 - Replace `ntcharts/picture` integration with `nimbleterminal.dev/ntpicture`.
   Share a terminal session and image-ID allocator with other picture widgets
@@ -27,7 +52,7 @@
 - `Probe` and `FrameAt` need ffprobe/ffmpeg, independently of libmpv. Native
   media remains local-file-only with configurable size and dimension limits.
 
-## Browser hosts
+### Browser hosts
 
 Update the host's ntvideo dependency and refresh its browser assets together.
 Add this declaration to the host's `go.mod`:

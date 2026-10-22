@@ -2,7 +2,7 @@
 
 ntvideo is a Bubble Tea v2 component with native runtime-loaded libmpv and
 browser HTML video backends. Read README.md for the public contract and
-MIGRATING.md for v0.2.0 compatibility changes.
+MIGRATING.md for v0.3.0 upgrade notes and earlier compatibility changes.
 
 ## Structure and boundaries
 

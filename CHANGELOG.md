@@ -1,18 +1,14 @@
 # CHANGELOG
 
-## Unreleased
+## v0.3.0 (2026-10-22)
 
- * 2026-10-22: Add optional native `FrameTransform` processing with `WithFrameTransform` and `SetFrameTransform`, including paused redraws and cancellation of stale presentation work.
- * Stage browser assets before publishing them, preserving existing files and preventing partial exports after write failures.
- * Discard stale playback status after control changes and give status events independent track slices.
- * Reject invalid media timestamps and report libmpv ABI call failures as errors.
- * Hold native seeks during loading until mpv is ready, allowing hosts to restore a saved position immediately after `Load`.
- * Export bounded SRT/WebVTT parsing and headless container transcript extraction; include subtitle languages, titles, and dispositions in `Probe`.
- * Add size-limited batch frame extraction with one FFmpeg process and sparse input seeks. `FrameAt` also accepts output-size limits.
- * Add opt-in timestamped caption enter/exit events with seek, track-change, load, and close reasons. Support native SRT/WebVTT sidecars and loaded browser text tracks, with bounded parsing and a demo event counter.
- * Add native terminal-text captions over glyph or Kitty video, enabled with `-caption-render text` or the player's **t** key. Expose active native cue text through `Status.CaptionText`.
- * Add caption toggle and track menu to the player, with subtitle-file flags and browser WebVTT query parameters. Opening the menu pauses video without resuming on close.
- * Preserve native external-caption labels and languages; test native and browser caption selection and disabling.
+ * Add optional native `FrameTransform` processing with `WithFrameTransform` and `SetFrameTransform`, including paused redraws and cancellation of stale presentation work.
+ * Add caption controls, native terminal-text overlays, and opt-in timestamped cue enter/exit events.
+ * Export bounded SRT/WebVTT parsing and headless subtitle transcripts with `ParseCues` and `Cues`; expose subtitle languages, titles, and dispositions in `Probe`.
+ * Add size-limited `Frames` batches using one FFmpeg process and sparse seeks. `FrameAt` also accepts output-size limits.
+ * Hold native seeks until loading finishes, so hosts can restore positions immediately after `Load`.
+ * Discard stale playback samples, give status events independent track slices, and reject invalid timestamps.
+ * Report libmpv ABI call failures as errors and publish browser assets only after complete writes.
 
 ## v0.2.0 (2026-10-21)
 

@@ -9,8 +9,9 @@ half-block rendering. Audio belongs to the browser or the OS media backend.
 
 This is an experimental MVP, with a portable public API offering native and browser playback.
 
-For v0.2.0 changes, see the [changelog](CHANGELOG.md) and
-[migration guide](MIGRATING.md), including the `Model.Close` API change.
+For v0.3.0 changes, see the [changelog](CHANGELOG.md) and
+[migration guide](MIGRATING.md). Hosts upgrading from v0.1.0 must also account
+for the v0.2.0 `Model.Close` API change.
 
 ## Use
 
@@ -453,8 +454,9 @@ feature-detected and may be unavailable.
 `WithDescription` labels browser video and status; `WithTranscript` exposes a
 browser transcript link. Terminal applications should present descriptive status
 and transcript links as ordinary text beside the image. Burned-in native
-subtitles are not screen-reader text. There is no synthesized audio description
-or transcript extraction. `Status.CaptionText` exposes the current native
+subtitles are not screen-reader text. There is no synthesized audio description.
+Use headless `Cues` to extract a timestamped transcript from text subtitles; it
+does not transcribe audio. `Status.CaptionText` exposes the current native
 plain-text cue (sanitized and bounded), and cue changes emit `EventMsg` even
 while paused. It is empty between cues, for bitmap subtitles, and in browsers.
 Hosts can use it in their own terminal text or accessibility interface.
