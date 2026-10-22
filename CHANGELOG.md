@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+ * Discard stale playback status after control changes and give status events independent track slices.
+ * Reject invalid media timestamps and report libmpv ABI call failures as errors.
  * Hold native seeks during loading until mpv is ready, allowing hosts to restore a saved position immediately after `Load`.
  * Export bounded SRT/WebVTT parsing and headless container transcript extraction; include subtitle languages, titles, and dispositions in `Probe`.
  * Add size-limited batch frame extraction with one FFmpeg process and sparse input seeks. `FrameAt` also accepts output-size limits.

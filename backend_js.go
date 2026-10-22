@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"math"
 	"strconv"
 	"sync"
 	"syscall/js"
@@ -173,11 +172,7 @@ func (b *domBackend) SelectTrack(kind, id string) error {
 	})
 }
 func browserDuration(v js.Value) time.Duration {
-	n := v.Float()
-	if math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
-		return 0
-	}
-	return time.Duration(n * float64(time.Second))
+	return mediaDuration(v.Float())
 }
 func (b *domBackend) Poll() (s Status, err error) {
 	err = jsTry(func() {

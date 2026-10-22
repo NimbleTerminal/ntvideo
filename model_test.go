@@ -142,6 +142,60 @@ func TestSourceAndStatusOwnership(t *testing.T) {
 		t.Fatal("status aliases model")
 	}
 }
+
+func TestStaleSampleDoesNotReplaceStatus(t *testing.T) {
+	for name, change := range map[string]func(*Model){
+		"seek":     func(m *Model) { m.Seek(time.Second) },
+		"load":     func(m *Model) { m.Load(Source{URL: "new.mp4"}) },
+		"captions": func(m *Model) { m.SelectCaptionTrack("2") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, b := fakeModel()
+			defer m.Close()
+			m.Update(m.sample()())
+			b.status = Status{State: Playing, CurrentTime: 8 * time.Second, Duration: time.Minute,
+				AudioTracks: []Track{{ID: "old"}}, CaptionTracks: []Track{{ID: "old"}}, CaptionText: "old"}
+			stale := m.sample()()
+			change(m)
+			want := m.Status()
+			for _, msg := range messages(m.Update(stale)) {
+				if event, ok := msg.(EventMsg); ok {
+					t.Fatalf("stale status event: %+v", event)
+				}
+			}
+			if !reflect.DeepEqual(m.Status(), want) {
+				t.Fatalf("stale status replaced current: got %+v, want %+v", m.Status(), want)
+			}
+			b.status = Status{State: Paused, CurrentTime: time.Second}
+			fresh := m.sample()
+			if fresh == nil {
+				t.Fatal("stale sample stalled producer")
+			}
+			m.Update(fresh())
+			if m.Status().CurrentTime != time.Second {
+				t.Fatal("fresh status was discarded")
+			}
+		})
+	}
+}
+
+func TestStatusEventOwnsTrackSlices(t *testing.T) {
+	m, b := fakeModel()
+	defer m.Close()
+	b.status.AudioTracks = []Track{{ID: "audio"}}
+	b.status.CaptionTracks = []Track{{ID: "caption"}}
+	found := false
+	for _, msg := range messages(m.Update(m.sample()())) {
+		if event, ok := msg.(EventMsg); ok {
+			found = true
+			event.Status.AudioTracks[0].ID = "edited"
+			event.Status.CaptionTracks[0].ID = "edited"
+		}
+	}
+	if !found || m.Status().AudioTracks[0].ID != "audio" || m.Status().CaptionTracks[0].ID != "caption" {
+		t.Fatal("event aliases model tracks")
+	}
+}
 func TestInitIsIdempotent(t *testing.T) {
 	m, _ := fakeModel()
 	if m.Init() == nil {

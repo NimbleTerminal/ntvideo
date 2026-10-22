@@ -277,8 +277,9 @@ func (m *Model) Update(msg tea.Msg) (cmd tea.Cmd) {
 			return pictureCmd
 		}
 		if msg.epoch != m.epoch {
-			// A sample from before a seek/load/track change must not restore an old cue.
-			msg.status.CaptionText = ""
+			// Discard the entire old sample, including status and errors, but
+			// keep the producer running so queued controls get a fresh sample.
+			return tea.Batch(pictureCmd, m.next())
 		}
 		if m.cfg.captionEvents && m.cfg.source.URL != "" && msg.cueVersion == m.cueVersion && msg.status.cueData != nil {
 			m.queueCueEvents(m.cues.observe(msg.status.cueData, msg.status.CurrentTime, msg.status.Duration, m.cueReason, m.cfg.loop))
@@ -286,16 +287,18 @@ func (m *Model) Update(msg tea.Msg) (cmd tea.Cmd) {
 		}
 		msg.status.cueData = nil
 		var event tea.Cmd
-		if !statusEqual(m.status, msg.status) {
-			event = func() tea.Msg { return EventMsg{m.ID(), msg.status} }
-		}
+		changed := !statusEqual(m.status, msg.status)
 		m.status = msg.status
+		if changed {
+			id, status := m.ID(), m.Status()
+			event = func() tea.Msg { return EventMsg{id, status} }
+		}
 		if errors.Is(msg.status.Err, ErrUnsupported) {
 			// This build has no backend. Report once and stop sampling.
 			m.busy = false
 			return tea.Batch(pictureCmd, event)
 		}
-		if msg.epoch != m.epoch || msg.frame == nil || !m.visible {
+		if msg.frame == nil || !m.visible {
 			return tea.Batch(pictureCmd, event, m.next())
 		}
 		m.busy = false

@@ -36,6 +36,8 @@ The component follows `ntpicture.Picture`'s pointer-mutating convention:
   `v.SetMuted(true)` on the Tea event loop. They queue work in call order; they
   need no returned command. State is asynchronous: read `v.Status()` or consume
   `ntvideo.EventMsg`, emitted when `Status` changes, using its ID to distinguish widgets.
+  Both expose independent track slices. Samples from before a seek, load, or
+  caption-track change cannot replace the current status or emit stale events.
 - Run commands returned by `SetBounds`, `SetSize`, and `SetVisible`. Positions
   are zero-based terminal **cells**, relative to the host's visible grid.
 - Before quitting, return `tea.Sequence(v.Close(), tea.Quit)`. Also defer

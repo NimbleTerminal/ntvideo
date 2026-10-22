@@ -20,17 +20,18 @@ type mpvFunction struct {
 	cif    types.CallInterface
 }
 
-func (f *mpvFunction) call(result unsafe.Pointer, args ...unsafe.Pointer) {
-	if _, err := ffi.CallFunction(&f.cif, f.symbol, result, args); err != nil {
-		// Preparation validates the ABI and architecture before the backend is used.
-		panic(fmt.Sprintf("ntvideo: libmpv ABI call failed: %v", err))
-	}
+func (f *mpvFunction) call(result unsafe.Pointer, args ...unsafe.Pointer) error {
+	_, err := ffi.CallFunction(&f.cif, f.symbol, result, args)
 	runtime.KeepAlive(args)
+	if err != nil {
+		return fmt.Errorf("ntvideo: libmpv ABI call failed: %w", err)
+	}
+	return nil
 }
-func (f *mpvFunction) integer(args ...unsafe.Pointer) int32 {
+func (f *mpvFunction) integer(args ...unsafe.Pointer) (int32, error) {
 	var result int32
-	f.call(unsafe.Pointer(&result), args...)
-	return result
+	err := f.call(unsafe.Pointer(&result), args...)
+	return result, err
 }
 
 type mpvLibrary struct {
@@ -123,12 +124,17 @@ func goString(p unsafe.Pointer) string {
 	}
 	return out.String()
 }
-func (l *mpvLibrary) err(code int32) error {
+func (l *mpvLibrary) err(code int32, callErr ...error) error {
+	if len(callErr) > 0 && callErr[0] != nil {
+		return callErr[0]
+	}
 	if code >= 0 {
 		return nil
 	}
 	var p unsafe.Pointer
-	l.fn("mpv_error_string").call(unsafe.Pointer(&p), unsafe.Pointer(&code))
+	if err := l.fn("mpv_error_string").call(unsafe.Pointer(&p), unsafe.Pointer(&code)); err != nil {
+		return err
+	}
 	return fmt.Errorf("ntvideo: media backend: %s", goString(p))
 }
 
@@ -137,6 +143,23 @@ type mpvEvent struct {
 	Userdata  uint64
 	Data      unsafe.Pointer
 }
+
+// Stable enum values from libmpv's client.h and render.h.
+const (
+	mpvEventNone            = 0
+	mpvEventEndFile         = 7
+	mpvEventFileLoaded      = 8
+	mpvEventSeek            = 20
+	mpvEventPlaybackRestart = 21
+
+	mpvRenderParamAPIType            = 1
+	mpvRenderParamBlockForTargetTime = 12
+	mpvRenderParamSWSize             = 17
+	mpvRenderParamSWFormat           = 18
+	mpvRenderParamSWStride           = 19
+	mpvRenderParamSWPointer          = 20
+)
+
 type mpvEndFile struct{ Reason, Error int32 }
 type mpvRenderParam struct {
 	Kind int32

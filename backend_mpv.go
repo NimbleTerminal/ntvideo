@@ -24,6 +24,7 @@ type mpvBackend struct {
 	width, height    int
 	latest           image.Image
 	renderErr        error
+	controlErr       error // ABI errors from metadata reads, consumed by Poll.
 	redraw           bool
 	loading, loaded  bool
 	seekPending      bool
@@ -45,7 +46,10 @@ func newBackend(c config) (backend, error) {
 		return nil, err
 	}
 	var handle unsafe.Pointer
-	lib.fn("mpv_create").call(unsafe.Pointer(&handle))
+	if err := lib.fn("mpv_create").call(unsafe.Pointer(&handle)); err != nil {
+		lib.close()
+		return nil, err
+	}
 	b := &mpvBackend{lib: lib, handle: handle, cfg: c, stop: make(chan struct{}), done: make(chan struct{}), width: 480, height: 320}
 	if b.handle == nil {
 		lib.close()
@@ -90,9 +94,10 @@ func newBackend(c config) (backend, error) {
 	}
 	return b, nil
 }
-func (b *mpvBackend) destroy() {
-	b.lib.fn("mpv_terminate_destroy").call(nil, unsafe.Pointer(&b.handle))
+func (b *mpvBackend) destroy() error {
+	err := b.lib.fn("mpv_terminate_destroy").call(nil, unsafe.Pointer(&b.handle))
 	b.lib.close()
+	return err
 }
 func (b *mpvBackend) set(fn, name, value string) error {
 	n, v := cstring(name), cstring(value)
@@ -118,16 +123,17 @@ func (b *mpvBackend) command(a, arg, c string, extra ...string) error {
 		args[i] = cstring(value)
 	}
 	ptr := unsafe.Pointer(&args[0])
-	code := b.lib.fn("mpv_command").integer(unsafe.Pointer(&b.handle), unsafe.Pointer(&ptr))
+	code, err := b.lib.fn("mpv_command").integer(unsafe.Pointer(&b.handle), unsafe.Pointer(&ptr))
 	runtime.KeepAlive(args)
-	return b.lib.err(code)
+	return b.lib.err(code, err)
 }
 func (b *mpvBackend) number(name string) float64 {
 	n := cstring(name)
 	format := int32(5)
 	var value float64
 	ptr := unsafe.Pointer(&value)
-	b.lib.fn("mpv_get_property").integer(unsafe.Pointer(&b.handle), unsafe.Pointer(&n), unsafe.Pointer(&format), unsafe.Pointer(&ptr))
+	_, err := b.lib.fn("mpv_get_property").integer(unsafe.Pointer(&b.handle), unsafe.Pointer(&n), unsafe.Pointer(&format), unsafe.Pointer(&ptr))
+	b.recordControlError(err)
 	return value
 }
 func (b *mpvBackend) flag(name string) bool {
@@ -135,18 +141,27 @@ func (b *mpvBackend) flag(name string) bool {
 	format := int32(3)
 	var value int32
 	ptr := unsafe.Pointer(&value)
-	b.lib.fn("mpv_get_property").integer(unsafe.Pointer(&b.handle), unsafe.Pointer(&n), unsafe.Pointer(&format), unsafe.Pointer(&ptr))
+	_, err := b.lib.fn("mpv_get_property").integer(unsafe.Pointer(&b.handle), unsafe.Pointer(&n), unsafe.Pointer(&format), unsafe.Pointer(&ptr))
+	b.recordControlError(err)
 	return value != 0
 }
 func (b *mpvBackend) text(name string) string {
 	n := cstring(name)
 	var value unsafe.Pointer
-	b.lib.fn("mpv_get_property_string").call(unsafe.Pointer(&value), unsafe.Pointer(&b.handle), unsafe.Pointer(&n))
+	if err := b.lib.fn("mpv_get_property_string").call(unsafe.Pointer(&value), unsafe.Pointer(&b.handle), unsafe.Pointer(&n)); err != nil {
+		b.recordControlError(err)
+		return ""
+	}
 	if value == nil {
 		return ""
 	}
-	defer b.lib.fn("mpv_free").call(nil, unsafe.Pointer(&value))
+	defer func() { b.recordControlError(b.lib.fn("mpv_free").call(nil, unsafe.Pointer(&value))) }()
 	return goString(value)
+}
+func (b *mpvBackend) recordControlError(err error) {
+	if b.controlErr == nil {
+		b.controlErr = err
+	}
 }
 func (b *mpvBackend) Load(s Source) error {
 	s = cloneSource(s)
@@ -254,20 +269,22 @@ func (b *mpvBackend) Poll() (Status, error) {
 	for i := 0; i < 256; i++ {
 		var event unsafe.Pointer
 		timeout := float64(0)
-		b.lib.fn("mpv_wait_event").call(unsafe.Pointer(&event), unsafe.Pointer(&b.handle), unsafe.Pointer(&timeout))
+		if err := b.lib.fn("mpv_wait_event").call(unsafe.Pointer(&event), unsafe.Pointer(&b.handle), unsafe.Pointer(&timeout)); err != nil {
+			return Status{State: Failed}, err
+		}
 		if event == nil {
 			break
 		}
 		ev := *(*mpvEvent)(event)
-		if ev.ID == 0 {
+		if ev.ID == mpvEventNone {
 			break
 		}
-		if ev.ID == 20 && !b.cfg.loop {
+		if ev.ID == mpvEventSeek && !b.cfg.loop {
 			b.cueSeekSerial++
 		} // Model.Seek marks explicit seeks; automatic native loops remain playback.
 		code := ev.Error
 		reason := int32(-1)
-		if ev.ID == 7 && ev.Data != nil {
+		if ev.ID == mpvEventEndFile && ev.Data != nil {
 			end := *(*mpvEndFile)(ev.Data)
 			code = end.Error
 			reason = end.Reason
@@ -275,17 +292,17 @@ func (b *mpvBackend) Poll() (Status, error) {
 		if e := b.lib.err(code); e != nil {
 			eventErr = e
 		}
-		if ev.ID == 7 {
+		if ev.ID == mpvEventEndFile {
 			b.loading = false
 			if reason != 0 {
 				b.loaded = false // Stopped or failed; keep-open retains EOF frames.
 			}
 		}
-		if ev.ID == 21 { // MPV_EVENT_PLAYBACK_RESTART: a seek/load has settled.
+		if ev.ID == mpvEventPlaybackRestart { // MPV_EVENT_PLAYBACK_RESTART: a seek/load has settled.
 			b.seekPending = false
 			b.clearFrame()
 		}
-		if ev.ID == 8 {
+		if ev.ID == mpvEventFileLoaded {
 			b.loading = false
 			b.loaded = true
 			b.clearFrame()
@@ -322,7 +339,7 @@ func (b *mpvBackend) Poll() (Status, error) {
 	} else if eventErr != nil {
 		b.deferredSeek = nil
 	}
-	s := Status{State: Idle, CurrentTime: time.Duration(b.number("time-pos") * float64(time.Second)), Duration: time.Duration(b.number("duration") * float64(time.Second)), Volume: b.number("volume") / 100, Muted: b.flag("mute")}
+	s := Status{State: Idle, CurrentTime: mediaDuration(b.number("time-pos")), Duration: mediaDuration(b.number("duration")), Volume: b.number("volume") / 100, Muted: b.flag("mute")}
 	if b.loading {
 		s.State = Loading
 	}
@@ -376,6 +393,8 @@ func (b *mpvBackend) Poll() (Status, error) {
 	if renderErr != nil {
 		eventErr = renderErr
 	}
+	eventErr = errors.Join(eventErr, b.controlErr)
+	b.controlErr = nil
 	return s, eventErr
 }
 func (b *mpvBackend) clearFrame() {
@@ -413,16 +432,16 @@ func (b *mpvBackend) renderLoop(ready chan<- error) {
 	var renderer unsafe.Pointer
 	rendererPtr := unsafe.Pointer(&renderer)
 	api := cstring("sw")
-	params := []mpvRenderParam{{Kind: 1, Data: unsafe.Pointer(api)}, {}}
+	params := []mpvRenderParam{{Kind: mpvRenderParamAPIType, Data: unsafe.Pointer(api)}, {}}
 	paramsPtr := unsafe.Pointer(&params[0])
-	code := b.lib.fn("mpv_render_context_create").integer(unsafe.Pointer(&rendererPtr), unsafe.Pointer(&b.handle), unsafe.Pointer(&paramsPtr))
+	code, callErr := b.lib.fn("mpv_render_context_create").integer(unsafe.Pointer(&rendererPtr), unsafe.Pointer(&b.handle), unsafe.Pointer(&paramsPtr))
 	runtime.KeepAlive(params)
 	runtime.KeepAlive(api)
-	if code < 0 {
-		ready <- b.lib.err(code)
+	if err := b.lib.err(code, callErr); err != nil {
+		ready <- err
 		return
 	}
-	defer b.lib.fn("mpv_render_context_free").call(nil, unsafe.Pointer(&renderer))
+	defer func() { b.recordRenderError(b.lib.fn("mpv_render_context_free").call(nil, unsafe.Pointer(&renderer))) }()
 	ready <- nil
 	ticker := time.NewTicker(time.Second / 30)
 	defer ticker.Stop()
@@ -437,7 +456,10 @@ func (b *mpvBackend) renderLoop(ready chan<- error) {
 			b.redraw = false
 			b.mu.Unlock()
 			var flags uint64
-			b.lib.fn("mpv_render_context_update").call(unsafe.Pointer(&flags), unsafe.Pointer(&renderer))
+			if err := b.lib.fn("mpv_render_context_update").call(unsafe.Pointer(&flags), unsafe.Pointer(&renderer)); err != nil {
+				b.recordRenderError(err)
+				return
+			}
 			if flags&1 == 0 && !redraw && w == oldW && h == oldH {
 				continue
 			}
@@ -448,24 +470,28 @@ func (b *mpvBackend) renderLoop(ready chan<- error) {
 			format := cstring("rgb0")
 			block := int32(0)
 			params := []mpvRenderParam{
-				{Kind: 17, Data: unsafe.Pointer(&size[0])},
-				{Kind: 18, Data: unsafe.Pointer(format)},
-				{Kind: 19, Data: unsafe.Pointer(&stride)},
-				{Kind: 20, Data: unsafe.Pointer(&data[0])},
-				{Kind: 12, Data: unsafe.Pointer(&block)}, {},
+				{Kind: mpvRenderParamSWSize, Data: unsafe.Pointer(&size[0])},
+				{Kind: mpvRenderParamSWFormat, Data: unsafe.Pointer(format)},
+				{Kind: mpvRenderParamSWStride, Data: unsafe.Pointer(&stride)},
+				{Kind: mpvRenderParamSWPointer, Data: unsafe.Pointer(&data[0])},
+				{Kind: mpvRenderParamBlockForTargetTime, Data: unsafe.Pointer(&block)}, {},
 			}
 			pp := unsafe.Pointer(&params[0])
-			code := b.lib.fn("mpv_render_context_render").integer(unsafe.Pointer(&renderer), unsafe.Pointer(&pp))
+			code, callErr := b.lib.fn("mpv_render_context_render").integer(unsafe.Pointer(&renderer), unsafe.Pointer(&pp))
 			runtime.KeepAlive(params)
 			runtime.KeepAlive(data)
 			runtime.KeepAlive(format)
-			if code < 0 {
-				b.mu.Lock()
-				b.renderErr = b.lib.err(code)
-				b.mu.Unlock()
+			if err := b.lib.err(code, callErr); err != nil {
+				b.recordRenderError(err)
+				if callErr != nil {
+					return
+				}
 				continue
 			}
-			b.lib.fn("mpv_render_context_report_swap").call(nil, unsafe.Pointer(&renderer))
+			if err := b.lib.fn("mpv_render_context_report_swap").call(nil, unsafe.Pointer(&renderer)); err != nil {
+				b.recordRenderError(err)
+				return
+			}
 			for i := 3; i < len(data); i += 4 {
 				data[i] = 255
 			}
@@ -479,9 +505,19 @@ func (b *mpvBackend) renderLoop(ready chan<- error) {
 	}
 }
 
+func (b *mpvBackend) recordRenderError(err error) {
+	if err == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.renderErr == nil {
+		b.renderErr = err
+	}
+}
+
 func (b *mpvBackend) Close() error {
 	close(b.stop)
 	<-b.done
-	b.destroy()
-	return nil
+	return errors.Join(b.destroy(), b.renderErr, b.controlErr)
 }
