@@ -2,11 +2,47 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestFailedAssetWriteDoesNotPublish(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "surface.js")
+		if force {
+			if err := os.WriteFile(path, []byte("original"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		failure := errors.New("write failed")
+		written, err := publishAsset(path, force, func(w io.Writer) error {
+			if _, err := io.WriteString(w, "partial"); err != nil {
+				return err
+			}
+			return failure
+		})
+		if written || !errors.Is(err, failure) {
+			t.Fatalf("published failed write: %v, %v", written, err)
+		}
+		data, err := os.ReadFile(path)
+		if force && (err != nil || string(data) != "original") || !force && !os.IsNotExist(err) {
+			t.Fatalf("destination changed: %q, %v", data, err)
+		}
+		entries, err := os.ReadDir(dir)
+		want := 0
+		if force {
+			want = 1
+		}
+		if err != nil || len(entries) != want {
+			t.Fatalf("temporary file leaked: %v, %v", entries, err)
+		}
+	}
+}
 
 func TestExportAndOverwritePolicy(t *testing.T) {
 	dir := t.TempDir()
@@ -54,5 +90,22 @@ func TestExportErrors(t *testing.T) {
 	os.WriteFile(path, []byte("file"), 0600)
 	if err := run([]string{path}, &bytes.Buffer{}); err == nil {
 		t.Fatal("destination error ignored")
+	}
+}
+
+func TestAssetPublicationPreservesConcurrentDestination(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "surface.js")
+	written, err := publishAsset(path, false, func(w io.Writer) error {
+		if _, err := io.WriteString(w, "new asset"); err != nil {
+			return err
+		}
+		return os.WriteFile(path, []byte("other exporter"), 0644)
+	})
+	if err != nil || written {
+		t.Fatalf("concurrent destination was replaced: %v, %v", written, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "other exporter" {
+		t.Fatalf("concurrent destination changed: %q, %v", data, err)
 	}
 }

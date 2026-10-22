@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+ * Stage browser assets before publishing them, preserving existing files and preventing partial exports after write failures.
  * Discard stale playback status after control changes and give status events independent track slices.
  * Reject invalid media timestamps and report libmpv ABI call failures as errors.
  * Hold native seeks during loading until mpv is ready, allowing hosts to restore a saved position immediately after `Load`.
