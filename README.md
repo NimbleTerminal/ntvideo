@@ -119,15 +119,17 @@ late messages to `Update`, including after closing. Closing after Keep preserves
 the retained picture. `Release() error` stops only media resources, without
 terminal output; use Close/Keep for the complete picture lifecycle.
 
-## Headless metadata and frames
+## Headless metadata, transcripts, and frames
 
-These functions need **ffprobe and ffmpeg**, but no terminal, libmpv, or audio
-device. They use local files only, disable network protocols, bound tool output,
-and impose a 15-second default deadline (also honoring context cancellation).
+These APIs need no terminal, libmpv, or audio device. `Probe` uses **ffprobe**;
+container subtitle extraction and frame decoding also use **ffmpeg**. Sidecar
+parsing needs neither tool. File APIs accept local regular files only, disable
+network protocols in external tools, bound their output, and impose a 15-second
+default deadline for the whole operation (also honoring context cancellation).
 
 ```go
 info, err := ntvideo.Probe(ctx, "movie.mp4", ntvideo.HeadlessOptions{})
-// info: Duration, Width, Height, VideoCodec, AudioCodec, HasAudio
+// info: Duration, Width, Height, VideoCodec, AudioCodec, HasAudio, Subtitles
 frame, err := ntvideo.FrameAt(ctx, "movie.mp4", time.Second, ntvideo.HeadlessOptions{})
 // frame is an owned image.Image, suitable for PNG output, thumbnails or WithPoster.
 ```
@@ -137,6 +139,67 @@ frame, err := ntvideo.FrameAt(ctx, "movie.mp4", time.Second, ntvideo.HeadlessOpt
 viewer does not automatically spawn FFmpeg for a fallback; a host can obtain a
 poster with FrameAt and pass it through WithPoster. Without a poster or libmpv,
 the widget shows “install mpv to play video”.
+
+### Subtitle discovery and transcripts
+
+`info.Subtitles` lists each subtitle stream's `Index` (subtitle ordinal for
+`0:s:N`), `StreamIndex` (absolute container index), `Codec`, `Language`, `Title`,
+`Default`, and `Forced`. Titles fall back to the container's handler name when
+there is no title tag. Use the subtitle ordinal to select a transcript:
+
+```go
+cues, err := ntvideo.Cues(ctx, "movie.mp4", ntvideo.HeadlessOptions{
+    SubtitleStream: 0, // First subtitle stream; choose via Probe's Subtitles list.
+})
+// After checking err, print a transcript for --text or an LLM:
+for _, cue := range cues {
+    fmt.Printf("%s --> %s\n%s\n\n", cue.Start, cue.End, cue.Text)
+}
+```
+
+`Cues` reads `.srt`/`.vtt` files directly and converts container subtitle streams
+to WebVTT with FFmpeg. It returns `ErrNoSubtitles` for containers without subtitle
+streams and `ErrSubtitleNotText` for known bitmap subtitle codecs; it does not
+perform OCR or speech recognition. Other unsupported codecs return FFmpeg errors.
+These headless transcripts do not automatically enable embedded native playback
+cue events. `TrackID` is the chosen subtitle ordinal, independently of libmpv IDs.
+
+For an existing reader, use the exported parser:
+
+```go
+cues, err := ntvideo.ParseCues(reader, ntvideo.CueSRT)
+// Or ntvideo.CueWebVTT for a WebVTT reader, including its WEBVTT header.
+```
+
+The parser and transcript extraction accept at most 4 MiB and 10,000 cues, with
+4096 sanitized plain-text runes per cue. IDs are stable ordinals in file order;
+multiline text and timestamps are retained, while styling is stripped. Inputs
+must be UTF-8; WebVTT timestamp maps are unsupported. Errors return no partial
+transcript. `ParseCues` leaves its reader open; callers own cancellation of a
+blocking reader. It leaves `TrackID` empty because no stream was selected.
+
+### Batch thumbnails
+
+```go
+frames, err := ntvideo.Frames(ctx, "movie.mp4", []time.Duration{
+    10 * time.Minute, 40 * time.Minute, 90 * time.Minute,
+}, ntvideo.HeadlessOptions{MaxFrameWidth: 640, MaxFrameHeight: 360})
+```
+
+`Frames` uses one probe and one FFmpeg process, with a separate input-side seek
+for each distinct timestamp. It decodes near the requested times rather than
+scanning the intervening movie, scales before PNG encoding, and returns owned
+images in request order. Duplicate timestamps produce independent images.
+Codec decoding may still require full-resolution source frames.
+
+The default output box is 640×360, preserving frame aspect ratio without
+upscaling. Batches accept up to 16 requests and a total output bounding-box budget
+of 16 Mi pixels. Source file/resolution `Limits` still apply before scaling;
+increase those explicitly for larger sources. Negative timestamps mean zero;
+timestamps at/past EOF fail the entire batch. Empty requests launch no tools.
+`FrameAt` accepts the same output-size options and shares the bounded extraction
+path; with both dimensions zero it retains the source size. A zero dimension in
+an explicitly resized request uses that dimension's 640×360 default.
 
 ## Task runner
 

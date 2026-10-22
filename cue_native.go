@@ -4,7 +4,6 @@ package ntvideo
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,12 +24,15 @@ func readCueFile(path string) nativeCueFile {
 		return nativeCueFile{err: err}
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxCueBytes+1))
+	format := CueSRT
+	if ext == ".vtt" {
+		format = CueWebVTT
+	}
+	cues, err := ParseCues(f, format)
 	if err != nil {
 		return nativeCueFile{err: err}
 	}
-	t, err := parseCaptionCues(data)
-	return nativeCueFile{t, err}
+	return nativeCueFile{timeline: newCueTimeline(cues)}
 }
 func (b *mpvBackend) captionSnapshot(s *Status) {
 	if !b.cfg.captionEvents || !b.loaded || b.seekPending {

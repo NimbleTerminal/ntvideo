@@ -3,6 +3,7 @@ package ntvideo
 import (
 	"fmt"
 	"html"
+	"io"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,6 +13,39 @@ import (
 
 const maxCueBytes = 4 << 20
 const maxCaptionCues = 10000
+
+// CueFormat identifies a UTF-8 subtitle sidecar format.
+type CueFormat string
+
+const (
+	CueSRT    CueFormat = "srt"
+	CueWebVTT CueFormat = "webvtt"
+)
+
+// ParseCues reads at most 4 MiB plus one overflow byte and returns at most 10,000
+// cues in file order. IDs are distinct stable ordinals within the file; TrackID
+// is empty. Text is plain, terminal-safe, and capped at 4096 runes per cue.
+// WebVTT timestamp maps are unsupported. Errors return no partial transcript.
+// The caller owns r; cancellation of a blocking reader is the caller's concern.
+func ParseCues(r io.Reader, format CueFormat) ([]CaptionCue, error) {
+	if format != CueSRT && format != CueWebVTT {
+		return nil, fmt.Errorf("ntvideo: unsupported cue format %q", format)
+	}
+	if r == nil {
+		return nil, fmt.Errorf("ntvideo: nil cue reader")
+	}
+	data, err := io.ReadAll(io.LimitReader(r, maxCueBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	header := strings.SplitN(strings.TrimPrefix(string(data), "\ufeff"), "\n", 2)[0]
+	header = strings.TrimSuffix(header, "\r")
+	vtt := header == "WEBVTT" || strings.HasPrefix(header, "WEBVTT ") || strings.HasPrefix(header, "WEBVTT\t")
+	if (format == CueWebVTT) != vtt {
+		return nil, fmt.Errorf("ntvideo: cue data does not match %s", format)
+	}
+	return parseCueData(data)
+}
 
 var cueTimestamp = regexp.MustCompile(`^(?:(\d{1,4}):)?(\d{2}):(\d{2})[.,](\d{3})$`)
 var cueMarkup = regexp.MustCompile(`<[^>]*>`)
@@ -34,6 +68,13 @@ func cueText(value string) string {
 	return captionPlainText(html.UnescapeString(cueMarkup.ReplaceAllString(value, "")))
 }
 func parseCaptionCues(data []byte) (*cueTimeline, error) {
+	cues, err := parseCueData(data)
+	if err != nil {
+		return nil, err
+	}
+	return newCueTimeline(cues), nil
+}
+func parseCueData(data []byte) ([]CaptionCue, error) {
 	if len(data) > maxCueBytes || !utf8.Valid(data) {
 		return nil, fmt.Errorf("caption cues require UTF-8 and at most %d bytes", maxCueBytes)
 	}
@@ -92,5 +133,5 @@ func parseCaptionCues(data []byte) (*cueTimeline, error) {
 		}
 		cues = append(cues, CaptionCue{ID: strconv.Itoa(len(cues)), Start: begin, End: end, Text: cueText(strings.Join(block[1:], "\n"))})
 	}
-	return newCueTimeline(cues), nil
+	return cues, nil
 }

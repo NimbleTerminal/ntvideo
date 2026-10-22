@@ -24,6 +24,9 @@ MIGRATING.md for v0.2.0 compatibility changes.
 - Caption cue events are opt-in and independent of raster/text presentation.
   Keep source generations, stale-sample rejection, overlapping/short cues, and
   seek/track/close reasons intact. Parsing errors must not stop video playback.
+- Headless transcript/frame APIs share local-file, deadline, and output limits.
+  Batch frames must seek to requested times rather than decode intervening spans;
+  preserve request order, independent duplicate images, and all-or-error results.
 
 ## Validation
 

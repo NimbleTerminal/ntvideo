@@ -94,6 +94,12 @@ func TestHeadlessMediaRejectsNetworkReferences(t *testing.T) {
 	if _, err := Probe(context.Background(), path, HeadlessOptions{}); err == nil {
 		t.Fatal("network playlist accepted")
 	}
+	if _, err := Cues(context.Background(), path, HeadlessOptions{}); err == nil {
+		t.Fatal("transcript extraction accepted network playlist")
+	}
+	if _, err := Frames(context.Background(), path, []time.Duration{0}, HeadlessOptions{}); err == nil {
+		t.Fatal("batch frames accepted network playlist")
+	}
 	if requests.Load() != 0 {
 		t.Fatal("ffprobe accessed network")
 	}

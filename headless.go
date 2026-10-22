@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/png"
 	"math"
 	"os/exec"
 	"strconv"
@@ -20,6 +19,15 @@ type MediaInfo struct {
 	Width, Height          int
 	VideoCodec, AudioCodec string
 	HasAudio               bool
+	Subtitles              []SubtitleStream
+}
+
+// SubtitleStream describes a container stream. Index is its subtitle-only
+// ordinal (0:s:N); StreamIndex is its absolute container stream index.
+type SubtitleStream struct {
+	Index, StreamIndex     int
+	Codec, Language, Title string
+	Default, Forced        bool
 }
 
 // HeadlessOptions selects trusted tool executables and resource limits. Empty
@@ -28,6 +36,11 @@ type HeadlessOptions struct {
 	Limits          Limits
 	FFprobe, FFmpeg string
 	Timeout         time.Duration
+	// SubtitleStream selects the zero-based subtitle ordinal for Cues.
+	SubtitleStream int
+	// MaxFrameWidth/Height bound output images, preserving aspect ratio.
+	// Frames defaults to 640x360; FrameAt retains source size when both are zero.
+	MaxFrameWidth, MaxFrameHeight int
 }
 
 func (o HeadlessOptions) deadline(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -79,7 +92,7 @@ func Probe(ctx context.Context, path string, opts HeadlessOptions) (MediaInfo, e
 	if tool == "" {
 		tool = "ffprobe"
 	}
-	data, err := runMediaTool(ctx, tool, 1<<20, "-v", "error", "-protocol_whitelist", "file", "-show_entries", "format=duration:stream=codec_type,codec_name,width,height,duration", "-of", "json", path)
+	data, err := runMediaTool(ctx, tool, 1<<20, "-v", "error", "-protocol_whitelist", "file", "-show_entries", "format=duration:stream=index,codec_type,codec_name,width,height,duration:stream_tags=language,title,handler_name:stream_disposition=default,forced", "-of", "json", path)
 	if err != nil {
 		return MediaInfo{}, err
 	}
@@ -88,11 +101,21 @@ func Probe(ctx context.Context, path string, opts HeadlessOptions) (MediaInfo, e
 			Duration string `json:"duration"`
 		} `json:"format"`
 		Streams []struct {
+			Index    int    `json:"index"`
 			Type     string `json:"codec_type"`
 			Codec    string `json:"codec_name"`
 			Width    int    `json:"width"`
 			Height   int    `json:"height"`
 			Duration string `json:"duration"`
+			Tags     struct {
+				Language string `json:"language"`
+				Title    string `json:"title"`
+				Handler  string `json:"handler_name"`
+			} `json:"tags"`
+			Disposition struct {
+				Default int `json:"default"`
+				Forced  int `json:"forced"`
+			} `json:"disposition"`
 		} `json:"streams"`
 	}
 	if err = json.Unmarshal(data, &raw); err != nil {
@@ -107,6 +130,12 @@ func Probe(ctx context.Context, path string, opts HeadlessOptions) (MediaInfo, e
 	}
 	info := MediaInfo{Duration: duration(raw.Format.Duration)}
 	for _, s := range raw.Streams {
+		if s.Type == "subtitle" {
+			if s.Tags.Title == "" {
+				s.Tags.Title = s.Tags.Handler
+			}
+			info.Subtitles = append(info.Subtitles, SubtitleStream{Index: len(info.Subtitles), StreamIndex: s.Index, Codec: s.Codec, Language: captionPlainText(s.Tags.Language), Title: captionPlainText(s.Tags.Title), Default: s.Disposition.Default != 0, Forced: s.Disposition.Forced != 0})
+		}
 		if s.Type == "video" {
 			if err = checkDimensions(s.Width, s.Height, opts.Limits); err != nil {
 				return MediaInfo{}, err
@@ -134,39 +163,9 @@ func Probe(ctx context.Context, path string, opts HeadlessOptions) (MediaInfo, e
 // ffprobe then ffmpeg, never plays audio, and returns an owned image. A timestamp
 // at/after EOF returns an error. Tool absence is reported to the caller.
 func FrameAt(ctx context.Context, path string, t time.Duration, opts HeadlessOptions) (image.Image, error) {
-	ctx, cancel := opts.deadline(ctx)
-	defer cancel()
-	path, err := validateLocalFile(path, opts.Limits)
+	frames, err := extractFrames(ctx, path, []time.Duration{t}, opts, true)
 	if err != nil {
 		return nil, err
 	}
-	info, err := Probe(ctx, path, opts)
-	if err != nil {
-		return nil, err
-	}
-	if info.Width <= 0 || info.Height <= 0 {
-		return nil, errors.New("ntvideo: source has no video")
-	}
-	if t < 0 {
-		t = 0
-	}
-	if info.Duration > 0 && t >= info.Duration {
-		return nil, errors.New("ntvideo: timestamp is at or past end of video")
-	}
-	tool := opts.FFmpeg
-	if tool == "" {
-		tool = "ffmpeg"
-	}
-	data, err := runMediaTool(ctx, tool, info.Width*info.Height*8+(1<<20), "-v", "error", "-nostdin", "-protocol_whitelist", "file", "-ss", strconv.FormatFloat(t.Seconds(), 'f', 6, 64), "-i", path, "-map", "0:v:0", "-frames:v", "1", "-an", "-sn", "-dn", "-threads", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1")
-	if err != nil {
-		return nil, err
-	}
-	cfg, err := png.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	if err = checkDimensions(cfg.Width, cfg.Height, opts.Limits); err != nil {
-		return nil, err
-	}
-	return png.Decode(bytes.NewReader(data))
+	return frames[0], nil
 }
