@@ -16,6 +16,61 @@ import (
 )
 
 // Opt-in integration fixture avoids network and external media in unit tests.
+func TestMPVSeekDuringLoad(t *testing.T) {
+	source := os.Getenv("NTVIDEO_TEST_FILE")
+	if source == "" {
+		t.Skip("set NTVIDEO_TEST_FILE")
+	}
+	raw, err := newBackend(config{muted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := raw.(*mpvBackend)
+	defer b.Close()
+	// Exercise the initial load, replacement of a loaded file, zero targets,
+	// and replacing a file before its queued seek has been submitted.
+	for _, target := range []time.Duration{time.Second, 0, 500 * time.Millisecond} {
+		if err := b.Load(Source{URL: source}); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Seek(2 * time.Second); err != nil {
+			t.Fatalf("early seek: %v", err)
+		}
+		if target == 500*time.Millisecond {
+			if err := b.Load(Source{URL: source}); err != nil {
+				t.Fatal(err)
+			}
+			if b.deferredSeek != nil {
+				t.Fatal("replacement retained the previous seek")
+			}
+		}
+		if err := b.Seek(target); err != nil {
+			t.Fatal(err)
+		}
+		var s Status
+		settled := false
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			s, err = b.Poll()
+			if err != nil {
+				t.Fatal(err)
+			}
+			frame, err := b.Frame(160, 90)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if frame != nil && b.deferredSeek == nil && !b.seekPending && s.State == Paused && math.Abs((s.CurrentTime-target).Seconds()) < 0.1 {
+				settled = true
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if !settled {
+			t.Fatalf("seek to %v did not settle paused with a frame: %+v", target, s)
+		}
+	}
+}
+
 func TestMPVCaptionCueTimeline(t *testing.T) {
 	source := os.Getenv("NTVIDEO_TEST_FILE")
 	if source == "" {

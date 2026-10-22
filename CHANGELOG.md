@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+ * Hold native seeks during loading until mpv is ready, allowing hosts to restore a saved position immediately after `Load`.
  * Export bounded SRT/WebVTT parsing and headless container transcript extraction; include subtitle languages, titles, and dispositions in `Probe`.
  * Add size-limited batch frame extraction with one FFmpeg process and sparse input seeks. `FrameAt` also accepts output-size limits.
  * Add opt-in timestamped caption enter/exit events with seek, track-change, load, and close reasons. Support native SRT/WebVTT sidecars and loaded browser text tracks, with bounded parsing and a demo event counter.

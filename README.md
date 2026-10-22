@@ -47,6 +47,11 @@ The parent owns keyboard bindings and focus policy. `Focus`, `Blur`, and
 `Focused` let it track selection; the component does not intercept global keys.
 The example maps space, arrows, mute, and volume controls.
 
+Native seeks requested while a file is loading are held until mpv reports the
+file loaded. The latest target wins, without changing the paused/playing state;
+loading another source discards the previous target. Hosts can restore a saved
+position immediately after `Load`, without waiting for `Status().Duration`.
+
 Fit modes are `FitContain` (letterbox), `FitCover` (center crop), and `FitFill`
 (stretch). Contain is the default. `v.SetFit(ntvideo.FitCover)` changes fit without
 restarting playback; run its returned command. Press **f** in the example to cycle

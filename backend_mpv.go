@@ -27,7 +27,8 @@ type mpvBackend struct {
 	redraw           bool
 	loading, loaded  bool
 	seekPending      bool
-	aspect           float64 // Control-thread metadata; dimensions sent to renderer under mu.
+	deferredSeek     *time.Duration // Latest seek requested while the file is loading.
+	aspect           float64        // Control-thread metadata; dimensions sent to renderer under mu.
 	captions         []Caption
 	tracksAt         time.Time
 	audio, subtitles []Track
@@ -174,12 +175,14 @@ func (b *mpvBackend) Load(s Source) error {
 	b.loading = true
 	b.loaded = false
 	b.seekPending = false
+	b.deferredSeek = nil
 	b.clearFrame()
 	b.aspect = 0
 	b.captions = s.Captions
 	b.audio = nil
 	b.subtitles = nil
 	if err := b.command("loadfile", s.URL, "replace"); err != nil {
+		b.loading = false
 		return err
 	}
 	if b.cfg.autoplay {
@@ -190,6 +193,10 @@ func (b *mpvBackend) Load(s Source) error {
 func (b *mpvBackend) Play() error  { return b.property("pause", "no") }
 func (b *mpvBackend) Pause() error { return b.property("pause", "yes") }
 func (b *mpvBackend) Seek(t time.Duration) error {
+	if b.loading {
+		b.deferredSeek = &t
+		return nil
+	}
 	if err := b.command("seek", strconv.FormatFloat(t.Seconds(), 'f', 6, 64), "absolute+exact"); err != nil {
 		return err
 	}
@@ -299,9 +306,21 @@ func (b *mpvBackend) Poll() (Status, error) {
 		if err := checkDimensions(int(b.number("width")), int(b.number("height")), b.cfg.limits); err != nil {
 			_ = b.command("stop", "", "")
 			b.loaded = false
+			b.deferredSeek = nil
 			b.clearFrame()
 			return Status{State: Failed}, err
 		}
+		// Drain load/restart events before submitting the seek, so an initial
+		// playback-restart cannot mark the new seek as already settled.
+		if b.deferredSeek != nil {
+			target := *b.deferredSeek
+			b.deferredSeek = nil
+			if err := b.Seek(target); err != nil {
+				eventErr = err
+			}
+		}
+	} else if eventErr != nil {
+		b.deferredSeek = nil
 	}
 	s := Status{State: Idle, CurrentTime: time.Duration(b.number("time-pos") * float64(time.Second)), Duration: time.Duration(b.number("duration") * float64(time.Second)), Volume: b.number("volume") / 100, Muted: b.flag("mute")}
 	if b.loading {
