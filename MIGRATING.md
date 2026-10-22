@@ -2,6 +2,11 @@
 
 ## Native hosts
 
+- Native hosts can opt into `WithFrameTransform` and change it on the Tea loop
+  with `SetFrameTransform` (nil disables it). Callbacks run off the UI loop and
+  must preserve image immutability. Continue driving `Update` to redraw paused
+  frames after changes. Browser playback and headless APIs are unaffected.
+
 - Replace `ntcharts/picture` integration with `nimbleterminal.dev/ntpicture`.
   Share a terminal session and image-ID allocator with other picture widgets
   using `WithTerminalSession` and `WithImageIDAllocator`.

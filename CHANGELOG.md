@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+ * 2026-10-22: Add optional native `FrameTransform` processing with `WithFrameTransform` and `SetFrameTransform`, including paused redraws and cancellation of stale presentation work.
  * Stage browser assets before publishing them, preserving existing files and preventing partial exports after write failures.
  * Discard stale playback status after control changes and give status events independent track slices.
  * Reject invalid media timestamps and report libmpv ABI call failures as errors.

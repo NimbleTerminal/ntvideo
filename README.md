@@ -90,6 +90,18 @@ Hosts can use `WithRenderMode(ntvideo.RenderGlyph)` at construction, or return
 `v.SetRenderMode(ntvideo.RenderRaster)` from Update. `RenderAuto` restores
 detection. These options affect native terminals; browsers use HTML video.
 
+Use `WithFrameTransform(func(image.Image, time.Duration) image.Image)` to process
+decoded native frames before glyph conversion or Kitty encoding. The timestamp
+is the sampled media position. The callback runs in the sampling command, off
+the UI loop; keep it prompt, avoid mutable UI state, and make shared callbacks
+safe across models. Treat both input and output images as immutable: allocate a
+new image to change pixels, or return the input or nil to leave it unchanged.
+Call `v.SetFrameTransform(f)` on the Tea loop to replace processing, or pass nil
+to disable it. Continue forwarding messages and running `Update` commands;
+pending samples and picture preparation are invalidated, and the next sample
+redraws even while paused. Browser DOM playback, posters, and headless frame
+extraction do not use this callback.
+
 ## Host integration and lifecycle
 
 Playback starts **paused on the first frame, with sound enabled**. The host owns

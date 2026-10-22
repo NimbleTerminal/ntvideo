@@ -222,8 +222,14 @@ func (m *Model) sample() tea.Cmd {
 		w, h = 0, 0
 	}
 	cueVersion := m.cueVersion
+	transform := m.cfg.frameTransform
 	return func() tea.Msg {
 		s, img := e.sample(w, h)
+		if img != nil && transform != nil {
+			if transformed := transform(img, s.CurrentTime); transformed != nil {
+				img = transformed
+			}
+		}
 		return sampleMsg{id: id, epoch: epoch, status: s, frame: img, cueVersion: cueVersion}
 	}
 }

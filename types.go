@@ -72,6 +72,7 @@ type CapabilitySet struct {
 func Capabilities() CapabilitySet { return platformCapabilities() }
 
 type config struct {
+	frameTransform                FrameTransform
 	scrubber                      bool
 	fit                           FitMode
 	renderMode                    RenderMode
