@@ -62,6 +62,12 @@ func newBackend(c config) (backend, error) {
 	if c.nativeCaptionOverlay {
 		opts = append(opts, [2]string{"sub-visibility", "no"})
 	}
+	if c.disableHW {
+		opts = append(opts, [2]string{"hwdec", "no"})
+	}
+	if c.disableAudio {
+		opts = append(opts, [2]string{"ao", "null"}, [2]string{"aid", "no"})
+	}
 	for _, o := range opts {
 		if err := b.option(o[0], o[1]); err != nil {
 			b.destroy()

@@ -91,6 +91,7 @@ type config struct {
 	nextID                        func() (int, error)
 	libraryPath                   string
 	limits                        Limits
+	disableHW, disableAudio       bool // Player only
 }
 type Option func(*config)
 
