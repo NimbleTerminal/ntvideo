@@ -78,6 +78,28 @@ func TestPlayerOptionsReachConfig(t *testing.T) {
 	}
 }
 
+func TestPlayerLimitsReachConfig(t *testing.T) {
+	want := Limits{MaxFileBytes: 7, MaxWidth: 640, MaxHeight: 480, MaxPixels: 640 * 480}
+	p, _, c, _ := fakePlayer(t, PlayerOptions{Limits: want})
+	if err := p.Load("a.mp4"); err != nil {
+		t.Fatal(err)
+	}
+	if c.limits != want {
+		t.Fatalf("limits %+v", c.limits)
+	}
+}
+
+func TestPlayerFrameAdvancesBackend(t *testing.T) {
+	p, b, _, _ := fakePlayer(t, PlayerOptions{})
+	if err := p.Load("a.mp4"); err != nil {
+		t.Fatal(err)
+	}
+	b.err = errors.New("decode failed")
+	if img, err := p.Frame(4, 4); img != nil || !errors.Is(err, b.err) {
+		t.Fatalf("frame without Status: %v %v", img, err)
+	}
+}
+
 func TestPlayerCloseIdempotent(t *testing.T) {
 	p, b, _, _ := fakePlayer(t, PlayerOptions{})
 	if err := p.Load("a.mp4"); err != nil {
@@ -113,9 +135,6 @@ func TestPlayerRealPlayback(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := p.Status(); err != nil {
-			t.Fatal(err)
-		}
 		img, err := p.Frame(160, 120)
 		if err != nil {
 			t.Fatal(err)

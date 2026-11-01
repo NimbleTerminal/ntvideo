@@ -6,17 +6,17 @@ import (
 	"time"
 )
 
-// PlayerOptions configure a Player. Both options narrow what the decoder
-// touches, for hosts that run it in a sandbox.
+// PlayerOptions configure a Player. The Disable options narrow what the
+// decoder touches, for hosts that run it in a sandbox.
 type PlayerOptions struct {
-	DisableHardwareDecoding bool // software decoding only
-	DisableAudio            bool // no audio output or decoding
+	DisableHardwareDecoding bool   // software decoding only
+	DisableAudio            bool   // no audio output or decoding
+	Limits                  Limits // zero fields use the defaults
 }
 
 // Player is playback without a terminal or Bubble Tea, for hosts that present
 // frames themselves. The media backend, and so libmpv, is not loaded until
-// the first Load. Native sources are local filenames. Call Status regularly:
-// it advances the backend's state, which Frame depends on.
+// the first Load. Native sources are local filenames.
 type Player struct {
 	opts   PlayerOptions
 	create func(config) (backend, error)
@@ -48,7 +48,7 @@ func (p *Player) Load(path string) error {
 		return ErrClosed
 	}
 	if p.b == nil {
-		b, err := p.create(config{volume: 1, muted: p.opts.DisableAudio, disableHW: p.opts.DisableHardwareDecoding, disableAudio: p.opts.DisableAudio})
+		b, err := p.create(config{volume: 1, muted: p.opts.DisableAudio, disableHW: p.opts.DisableHardwareDecoding, disableAudio: p.opts.DisableAudio, limits: p.opts.Limits})
 		if err != nil {
 			return err
 		}
@@ -74,10 +74,15 @@ func (p *Player) Status() (Status, error) {
 }
 
 // Frame returns the newest frame scaled to fit width×height, or nil when
-// there is no new one. The image is owned by the caller.
+// there is no new one. The image is opaque and owned by the caller. Frame
+// advances the backend itself, so it needs no calls to Status; an error it
+// returns is not reported again by Status.
 func (p *Player) Frame(width, height int) (image.Image, error) {
 	var img image.Image
 	err := p.with(func(b backend) (err error) {
+		if _, err = b.Poll(); err != nil {
+			return err
+		}
 		img, err = b.Frame(width, height)
 		return err
 	})
