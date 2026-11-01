@@ -1,5 +1,12 @@
 # Migration guide
 
+## Upgrading to v0.4.0
+
+Existing APIs are unchanged; `Player` is new and optional. Browser hosts must
+update their Bubble Tea WASM replacement to the revision in the
+[README](README.md#browser-example), rebuild WASM, and re-export ntvideo and
+Booba assets together.
+
 ## Upgrading to v0.3.0
 
 Existing method signatures are unchanged from v0.2.0. New caption, headless,

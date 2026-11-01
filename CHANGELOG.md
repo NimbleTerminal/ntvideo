@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## v0.4.0 (2026-11-01)
+
+ * Add `Player`: native playback for hosts that present frames themselves, with no terminal or Bubble Tea.
+ * Add `PlayerOptions` to disable hardware decoding and audio, and to set `Limits`.
+ * Update Go dependencies, including ntpicture v0.1.4, Bubble Tea v2.1.1, and Booba v0.10.7.
+ * Use ntpicture's dirty-frame updates on terminals that report support.
+ * Refresh the browser build's Booba assets. Rebuild WASM and re-export assets together.
+
 ## v0.3.0 (2026-10-22)
 
  * Add optional native `FrameTransform` processing with `WithFrameTransform` and `SetFrameTransform`, including paused redraws and cancellation of stale presentation work.

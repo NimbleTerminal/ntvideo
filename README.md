@@ -9,7 +9,7 @@ half-block rendering. Audio belongs to the browser or the OS media backend.
 
 This is an experimental MVP, with a portable public API offering native and browser playback.
 
-For v0.3.0 changes, see the [changelog](CHANGELOG.md) and
+For v0.4.0 changes, see the [changelog](CHANGELOG.md) and
 [migration guide](MIGRATING.md). Hosts upgrading from v0.1.0 must also account
 for the v0.2.0 `Model.Close` API change.
 
@@ -221,6 +221,29 @@ timestamps at/past EOF fail the entire batch. Empty requests launch no tools.
 path; with both dimensions zero it retains the source size. A zero dimension in
 an explicitly resized request uses that dimension's 640×360 default.
 
+## Playback without a terminal
+
+`Player` plays local files for hosts that present frames themselves, such as a
+compositor or a sandboxed worker. It needs libmpv but no terminal or Bubble Tea,
+and libmpv is not loaded until the first `Load`.
+
+```go
+p := ntvideo.NewPlayer(ntvideo.PlayerOptions{DisableHardwareDecoding: true, DisableAudio: true})
+defer p.Close()
+if err := p.Load("movie.mp4"); err != nil {
+	return err
+}
+if err := p.Play(); err != nil {
+	return err
+}
+frame, err := p.Frame(640, 360) // nil until there is a new frame
+```
+
+Files load paused. Poll `Frame` at your own rate: it returns the newest opaque
+frame scaled to fit and it advances playback state itself, so an error it returns
+is not reported again by `Status`. A host that confines the process must leave libmpv and
+its dependencies readable, because they load at the first `Load`.
+
 ## Task runner
 
 The Taskfile follows the sibling ntcharts repositories: `default` builds,
@@ -361,7 +384,7 @@ include this replacement in their own go.mod**, because Go does not inherit
 replacements from dependencies:
 
 ```go
-replace charm.land/bubbletea/v2 => github.com/neomantra/bubbletea/v2 v2.0.0-20261009201241-c397c32a5074
+replace charm.land/bubbletea/v2 => github.com/neomantra/bubbletea/v2 v2.0.0-20261020122444-536722b0bdb6
 ```
 
 Publish the browser module without depending on the player or Booba:
@@ -537,7 +560,8 @@ protocol allowlists restrict nested inputs to `file` as well. Browser sources
 retain normal browser URL/CORS/CSP behavior; native file limits do not apply to
 the DOM backend.
 
-`WithLimits(Limits{...})` bounds native files and source dimensions. Defaults are
+`WithLimits(Limits{...})`, or `PlayerOptions.Limits`, bounds native files and
+source dimensions. Defaults are
 2 GiB per file, 4096 per dimension, and 4096×2160 pixels. Headless operations use
 the same defaults. Native dimensions are checked when metadata becomes available
 and playback is stopped if they exceed limits. Presentation rasters are capped
