@@ -159,6 +159,17 @@ tasks:
       - go test -mod=readonly {{.CLI_ARGS}} ./...
       - cd examples/player && go test -mod=readonly {{.CLI_ARGS}} ./...
 
+  fuzz:
+    desc: 'Fuzz subtitle, worker-metadata, and filename parsers (override FUZZTIME=5s)'
+    vars:
+      FUZZTIME: '{{.FUZZTIME | default "5s"}}'
+    cmds:
+      - |
+        set -eu
+        for target in FuzzParseCues FuzzDecodeWorkerCues FuzzCaptionPlainTextAndOverlay FuzzWorkerFilenamesAndSettings; do
+          go test -mod=readonly -fuzz="^${target}$" -fuzztime="{{.FUZZTIME}}" .
+        done
+
   test-native:
     desc: 'Run libmpv tests across both modules (pass flags after --)'
     cmds:

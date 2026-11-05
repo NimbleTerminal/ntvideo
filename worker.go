@@ -164,7 +164,7 @@ func newWorkerBackend(c config) (backend, error) {
 
 func sanitizeExt(ext string) string {
 	ext = strings.ToLower(ext)
-	if len(ext) > 10 {
+	if len(ext) < 2 || len(ext) > 10 {
 		return ""
 	}
 	for i, r := range ext {

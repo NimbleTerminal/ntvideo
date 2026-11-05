@@ -68,7 +68,11 @@ func workerLibraryPath(dir, fallback string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxWorkerSettingsBytes+1))
+	return parseWorkerSettings(f)
+}
+
+func parseWorkerSettings(r io.Reader) (string, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxWorkerSettingsBytes+1))
 	if err != nil {
 		return "", err
 	}
