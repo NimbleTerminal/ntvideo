@@ -1,6 +1,8 @@
 package ntvideo
 
 import (
+	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -19,9 +21,8 @@ import (
 )
 
 const (
-	maxWorkerSidecars       = 16
-	maxWorkerSidecarBytes   = 4 << 20
-	workerCaptionKindPrefix = "ntvideo/subtitles/v1:"
+	maxWorkerSidecars     = 16
+	maxWorkerSidecarBytes = 4 << 20
 )
 
 type nativeCueFile struct {
@@ -230,9 +231,6 @@ func (b *workerBackend) Load(s Source) error {
 			return err
 		}
 		resolvedCaps[i] = cpath
-		if b.cfg.captionEvents {
-			sidecars[i] = readCueFile(cpath)
-		}
 	}
 
 	b.stopHelper()
@@ -277,6 +275,10 @@ func (b *workerBackend) Load(s Source) error {
 			Language: cap.Language,
 			Default:  cap.Default,
 		}
+	}
+
+	if b.cfg.captionEvents && len(reqCaps) > 0 {
+		sidecars = b.loadWorkerCues(context.Background(), mediaDir, resolvedVideo, reqCaps)
 	}
 
 	conn, closeFn, err := b.starter(b.cfg, mediaDir, resolvedVideo)
@@ -688,8 +690,10 @@ func toWorkerState(s State) ntmediabox.State {
 
 // ServeWorker runs the worker side of an ntmediabox connection for kind "video",
 // reading files only by bare name from dir with hardware decoding and audio off.
+// It also serves bounded caption-cue metadata over the ntmediabox render protocol
+// on a separate connection, without loading libmpv.
 func ServeWorker(conn io.ReadWriter, dir string, opts PlayerOptions) error {
-	return ntmediabox.Serve(conn, func(kind string) (ntmediabox.Decoder, error) {
+	return serveWorker(conn, dir, func(kind string) (ntmediabox.Decoder, error) {
 		if kind != "video" {
 			return nil, errors.New("ntvideo: unknown worker media kind")
 		}
@@ -697,9 +701,29 @@ func ServeWorker(conn io.ReadWriter, dir string, opts PlayerOptions) error {
 	})
 }
 
+// serveWorker selects the documented ntmediabox media or render protocol once
+// per connection. Render requests carry caption metadata; media remains unchanged.
+func serveWorker(conn io.ReadWriter, dir string, factory func(string) (ntmediabox.Decoder, error)) error {
+	reader := bufio.NewReader(conn)
+	header, err := reader.Peek(5)
+	if err != nil {
+		return err
+	}
+	stream := struct {
+		io.Reader
+		io.Writer
+	}{reader, conn}
+	// 0x20 is msgRenderReq in the ntmediabox render wire specification.
+	if header[4] == 0x20 {
+		return ntmediabox.ServeRender(stream, workerCueHandler(dir))
+	}
+	return ntmediabox.Serve(stream, factory)
+}
+
 // NewWorkerDecoder returns an ntmediabox.Decoder backed by the native media
 // backend in dir with hardware decoding and audio disabled. opts.Limits sets
-// the worker's maximum limits; requests may narrow them.
+// the worker's maximum limits; requests may narrow them. Use ServeWorker to
+// support caption-cue metadata as well as the streaming decoder protocol.
 func NewWorkerDecoder(dir string, opts PlayerOptions) ntmediabox.Decoder {
 	opts.DisableHardwareDecoding = true
 	opts.DisableAudio = true

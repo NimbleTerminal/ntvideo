@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -21,6 +20,10 @@ import (
 const testWorkerArg = "--ntvideo-test-worker"
 
 func TestMain(m *testing.M) {
+	if len(os.Args) >= 3 && os.Args[1] == testHeadlessArg {
+		runHeadlessTestTool(os.Args[2:])
+		os.Exit(0)
+	}
 	if len(os.Args) == 3 && os.Args[1] == testWorkerArg {
 		if err := ServeWorker(ntmediabox.WorkerConn(), os.Args[2], PlayerOptions{}); err != nil {
 			os.Exit(1)
@@ -207,7 +210,7 @@ func TestWorkerBackendRoundTripAndCues(t *testing.T) {
 					return inner, nil
 				},
 			}
-			go ntmediabox.Serve(b, func(kind string) (ntmediabox.Decoder, error) {
+			go serveWorker(b, mediaDir, func(kind string) (ntmediabox.Decoder, error) {
 				return dec, nil
 			})
 			return a, func() error {
@@ -335,7 +338,7 @@ func TestWorkerBackendHelperDeathReportsFailed(t *testing.T) {
 				dir:    mediaDir,
 				create: func(config) (backend, error) { return inner, nil },
 			}
-			go ntmediabox.Serve(b, func(string) (ntmediabox.Decoder, error) { return dec, nil })
+			go serveWorker(b, mediaDir, func(string) (ntmediabox.Decoder, error) { return dec, nil })
 			return a, func() error {
 				select {
 				case closedCount <- struct{}{}:
@@ -397,7 +400,7 @@ func TestWorkerBackendReloadResetsGenerationAndStatus(t *testing.T) {
 				dir:    mediaDir,
 				create: func(config) (backend, error) { return inner, nil },
 			}
-			go ntmediabox.Serve(b, func(string) (ntmediabox.Decoder, error) {
+			go serveWorker(b, mediaDir, func(string) (ntmediabox.Decoder, error) {
 				if n == 2 {
 					st, _ := wb.Poll()
 					pollDuringHandshake = st.State
@@ -446,20 +449,6 @@ func TestWorkerBackendReloadResetsGenerationAndStatus(t *testing.T) {
 	}
 	s, _ := wb.Poll()
 	t.Fatalf("second Load dropped Gen=1 status; Poll() = %+v", s)
-}
-
-func testSandboxStage(t *testing.T) string {
-	t.Helper()
-	if runtime.GOOS != "linux" {
-		return ""
-	}
-	stageBin := filepath.Join(t.TempDir(), "ntconfine-stage")
-	cmd := exec.Command("go", "build", "-o", stageBin, "nimbleterminal.dev/ntconfine/cmd/ntconfine-stage")
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOWORK=off")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build ntconfine-stage: %v: %s", err, out)
-	}
-	return stageBin
 }
 
 func TestMPVWorkerPlayback(t *testing.T) { testMPVWorkerPlayback(t, "") }

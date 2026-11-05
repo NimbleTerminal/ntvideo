@@ -3,16 +3,28 @@
 ## Unreleased
 
 Native hosts can opt into OS-confined out-of-process playback with `WithWorker`
-and `ServeWorker` (or `NewWorkerDecoder`). A zero `WorkerConfig` requires OS
+and `ServeWorker` (or `NewWorkerDecoder`), and confine ffprobe/ffmpeg with
+`HeadlessOptions.Sandbox` (`*HeadlessSandbox`). Nil `Sandbox` preserves direct
+tool execution. A zero `WorkerConfig` or non-nil `HeadlessSandbox` requires OS
 confinement; Linux needs `ntconfine-stage` beside the host or an explicit
 `StagePath`, and Windows or other platforms without OS enforcement fail closed
-unless `AllowUnsandboxed` is set. `WithLibraryPath` also selects worker libmpv:
-its resolved file is readable inside the sandbox and its path is passed through
-private staged settings. Dependencies must be in permitted runtime directories.
-`PlayerOptions.LibraryPath` is the equivalent for direct `Player` and custom
-worker decoders. Requests may narrow, but cannot widen, limits configured in the
-worker's `PlayerOptions`. Worker mute/volume status follows host preferences,
-while audio remains disabled.
+unless `AllowUnsandboxed` is set. The confinement perimeter, including what
+remains in-process, is [SECURITY.md](SECURITY.md).
+
+Build the `ServeWorker` helper together with the host. With `WithCaptionEvents(true)`,
+worker-backed caption events obtain validated cue metadata from a separate
+confined helper connection; the host does not parse the subtitle source. Custom
+helpers wrapping only `NewWorkerDecoder` with `ntmediabox.Serve` should use
+`ServeWorker` to enable that metadata protocol. Metadata errors disable cue
+events for that sidecar and report `CaptionCueErr`; video playback continues.
+Requests may narrow, but cannot widen, limits configured in the worker's
+`PlayerOptions`.
+
+`WithLibraryPath` also selects worker libmpv: its resolved file is readable
+inside the sandbox and its path is passed through private staged settings.
+Dependencies must be in permitted runtime directories. `PlayerOptions.LibraryPath`
+is the equivalent for direct `Player` and custom worker decoders. Worker
+mute/volume status follows host preferences, while audio remains disabled.
 
 Browser hosts using Booba must replace `github.com/NimbleMarkets/go-booba`
 imports and module requirements with `nimbleterminal.dev/booba` (v0.12.1).

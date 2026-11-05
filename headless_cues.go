@@ -82,7 +82,7 @@ func Cues(ctx context.Context, path string, opts HeadlessOptions) ([]CaptionCue,
 		if tool == "" {
 			tool = "ffmpeg"
 		}
-		data, err := runMediaTool(ctx, tool, maxCueBytes, "-v", "error", "-nostdin", "-protocol_whitelist", "file", "-i", path, "-map", fmt.Sprintf("0:s:%d", opts.SubtitleStream), "-vn", "-an", "-dn", "-c:s", "webvtt", "-f", "webvtt", "pipe:1")
+		data, err := opts.runTool(ctx, path, tool, maxCueBytes, "-v", "error", "-nostdin", "-protocol_whitelist", "file", "-i", path, "-map", fmt.Sprintf("0:s:%d", opts.SubtitleStream), "-vn", "-an", "-dn", "-c:s", "webvtt", "-f", "webvtt", "pipe:1")
 		if err != nil {
 			return nil, err
 		}

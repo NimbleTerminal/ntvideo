@@ -36,11 +36,25 @@ type HeadlessOptions struct {
 	Limits          Limits
 	FFprobe, FFmpeg string
 	Timeout         time.Duration
+	// Sandbox confines ffprobe/ffmpeg with ntmediabox when non-nil. The zero
+	// configuration requires OS enforcement; nil preserves direct execution.
+	Sandbox *HeadlessSandbox
 	// SubtitleStream selects the zero-based subtitle ordinal for Cues.
 	SubtitleStream int
 	// MaxFrameWidth/Height bound output images, preserving aspect ratio.
 	// Frames defaults to 640x360; FrameAt retains source size when both are zero.
 	MaxFrameWidth, MaxFrameHeight int
+}
+
+// HeadlessSandbox configures OS confinement for headless media tools. Read
+// access is limited to the input file and runtime libraries, with no writable
+// paths or network access. SRT/WebVTT sidecars are still parsed in the host.
+type HeadlessSandbox struct {
+	// StagePath selects ntconfine-stage on Linux; empty resolves it beside
+	// the host executable. macOS uses sandbox-exec without a stage binary.
+	StagePath string
+	// AllowUnsandboxed explicitly permits fallback when enforcement is unavailable.
+	AllowUnsandboxed bool
 }
 
 func (o HeadlessOptions) deadline(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -53,18 +67,25 @@ func (o HeadlessOptions) deadline(ctx context.Context) (context.Context, context
 
 // boundedBuffer stops a subprocess whose output exceeds the expected budget.
 type boundedBuffer struct {
-	bytes.Buffer
+	buf bytes.Buffer
 	max int
 }
 
 func (b *boundedBuffer) Write(p []byte) (int, error) {
-	if len(p) > b.max-b.Len() {
+	if len(p) > b.max-b.buf.Len() {
 		return 0, errors.New("ntvideo: tool output exceeds limit")
 	}
-	return b.Buffer.Write(p)
+	return b.buf.Write(p)
 }
+
+func (b *boundedBuffer) Bytes() []byte  { return b.buf.Bytes() }
+func (b *boundedBuffer) String() string { return b.buf.String() }
 func runMediaTool(ctx context.Context, name string, maxOutput int, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	return collectMediaTool(ctx, name, cmd, maxOutput)
+}
+
+func collectMediaTool(ctx context.Context, name string, cmd *exec.Cmd, maxOutput int) ([]byte, error) {
 	out := &boundedBuffer{max: maxOutput}
 	stderr := &boundedBuffer{max: 64 << 10}
 	cmd.Stdout = out
@@ -92,7 +113,7 @@ func Probe(ctx context.Context, path string, opts HeadlessOptions) (MediaInfo, e
 	if tool == "" {
 		tool = "ffprobe"
 	}
-	data, err := runMediaTool(ctx, tool, 1<<20, "-v", "error", "-protocol_whitelist", "file", "-show_entries", "format=duration:stream=index,codec_type,codec_name,width,height,duration:stream_tags=language,title,handler_name:stream_disposition=default,forced", "-of", "json", path)
+	data, err := opts.runTool(ctx, path, tool, 1<<20, "-v", "error", "-protocol_whitelist", "file", "-show_entries", "format=duration:stream=index,codec_type,codec_name,width,height,duration:stream_tags=language,title,handler_name:stream_disposition=default,forced", "-of", "json", path)
 	if err != nil {
 		return MediaInfo{}, err
 	}

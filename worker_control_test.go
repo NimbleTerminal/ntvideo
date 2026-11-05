@@ -156,6 +156,45 @@ func TestWorkerCaptionSourcesSurviveMissingAndReorderedSidecars(t *testing.T) {
 	}
 }
 
+func TestWorkerUnsupportedSidecarsRemainUnsupported(t *testing.T) {
+	if runtime.GOOS == "js" {
+		t.Skip("native worker backend")
+	}
+	for _, ext := range []string{"", ".unsupported-extension", ".ASS", ".vtt!"} {
+		t.Run("extension"+ext, func(t *testing.T) {
+			dir := t.TempDir()
+			video, sub := filepath.Join(dir, "video.mp4"), filepath.Join(dir, "captions"+ext)
+			for _, path := range []string{video, sub} {
+				if err := os.WriteFile(path, []byte("fake"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			calls := 0
+			wb, err := newWorkerBackend(config{captionEvents: true, workerStart: func(_ config, dir, _ string) (io.ReadWriteCloser, func() error, error) {
+				calls++
+				if _, err := os.Stat(filepath.Join(dir, "sub-0"+sanitizeExt(ext))); err != nil {
+					t.Fatalf("caption extension changed: %v", err)
+				}
+				a, b := net.Pipe()
+				go serveWorker(b, dir, func(string) (ntmediabox.Decoder, error) {
+					return &workerDecoder{dir: dir, create: func(config) (backend, error) { return &stubWorkerInnerBackend{}, nil }}, nil
+				})
+				return a, func() error { _ = b.Close(); return a.Close() }, nil
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer wb.Close()
+			if err := wb.Load(Source{URL: video, Captions: []Caption{{Source: sub}}}); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("unsupported caption launched a metadata helper: starts=%d", calls)
+			}
+		})
+	}
+}
+
 func TestWorkerHiddenResizeAndMuteDoNotResumePlayback(t *testing.T) {
 	if runtime.GOOS == "js" {
 		t.Skip("native worker backend")
@@ -167,7 +206,7 @@ func TestWorkerHiddenResizeAndMuteDoNotResumePlayback(t *testing.T) {
 	inner := &stubWorkerInnerBackend{}
 	wb, err := newWorkerBackend(config{workerStart: func(_ config, dir, _ string) (io.ReadWriteCloser, func() error, error) {
 		a, b := net.Pipe()
-		go ntmediabox.Serve(b, func(string) (ntmediabox.Decoder, error) {
+		go serveWorker(b, dir, func(string) (ntmediabox.Decoder, error) {
 			return &workerDecoder{dir: dir, create: func(config) (backend, error) { return inner, nil }}, nil
 		})
 		return a, func() error { _ = b.Close(); return a.Close() }, nil

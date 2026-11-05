@@ -2,8 +2,10 @@
 
 ## Unreleased (2026-11-04)
 
- * Add opt-in `WithWorker`, `ServeWorker`, and `NewWorkerDecoder` for OS-confined out-of-process playback through `nimbleterminal.dev/ntmediabox` v0.1.0 and `nimbleterminal.dev/ntconfine` v0.1.1.
+ * Add opt-in `WithWorker`, `ServeWorker`, and `NewWorkerDecoder` for OS-confined out-of-process playback and caption-cue metadata through `nimbleterminal.dev/ntmediabox` v0.1.0 and `nimbleterminal.dev/ntconfine` v0.1.1.
+ * Add opt-in `HeadlessOptions.Sandbox` confinement through ntmediabox for ffprobe/ffmpeg, preserving deadlines, output bounds, and sparse frame extraction, and fix a subprocess output-limit bypass through `bytes.Buffer.ReadFrom`.
  * Forward trusted `WithLibraryPath` settings to confined workers with a literal library-file read grant; add `PlayerOptions.LibraryPath`.
+ * Document the in-process, worker, and headless security perimeter in `SECURITY.md`.
  * Migrate the browser player to `nimbleterminal.dev/booba` v0.12.1 and copy its ntwebterm runtime assets. Rebuild WASM and re-export browser assets together.
  * Update ntpicture to v0.1.5, goffi to v0.6.8, and terminfo to v1.3.1. Public API signatures are unchanged.
 

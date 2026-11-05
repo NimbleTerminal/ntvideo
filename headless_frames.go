@@ -107,7 +107,7 @@ func extractFrames(ctx context.Context, path string, times []time.Duration, opts
 	if tool == "" {
 		tool = "ffmpeg"
 	}
-	data, err := runMediaTool(ctx, tool, int(pixels)*len(unique)*8+len(unique)*(1<<20), args...)
+	data, err := opts.runTool(ctx, path, tool, int(pixels)*len(unique)*8+len(unique)*(1<<20), args...)
 	if err != nil {
 		return nil, err
 	}

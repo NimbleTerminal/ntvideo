@@ -195,21 +195,9 @@ func TestHeadlessMediaContainerCues(t *testing.T) {
 	if source == "" {
 		t.Skip("set NTVIDEO_TEST_FILE")
 	}
-	dir := t.TempDir()
-	first := filepath.Join(dir, "en.srt")
-	second := filepath.Join(dir, "es.srt")
-	for path, text := range map[string]string{first: testTranscript, second: strings.ReplaceAll(testTranscript, "Goodbye", "Adios")} {
-		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	path := filepath.Join(dir, "subtitled.mp4")
+	path := makeSubtitleContainer(t, source)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := runMediaTool(ctx, "ffmpeg", 4096, "-v", "error", "-nostdin", "-i", source, "-i", first, "-i", second, "-t", "2", "-map", "0:v:0", "-map", "0:a:0?", "-map", "1:0", "-map", "2:0", "-c:v", "libx264", "-threads", "1", "-c:a", "aac", "-c:s", "mov_text", "-metadata:s:s:0", "language=eng", "-metadata:s:s:0", "handler_name=English captions", "-metadata:s:s:1", "language=spa", "-metadata:s:s:1", "handler_name=Spanish captions", "-disposition:s:0", "default", "-disposition:s:1", "forced", path)
-	if err != nil {
-		t.Fatal(err)
-	}
 	info, err := Probe(ctx, path, HeadlessOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -230,4 +218,24 @@ func TestHeadlessMediaContainerCues(t *testing.T) {
 	if _, err := Cues(ctx, source, HeadlessOptions{}); !errors.Is(err, ErrNoSubtitles) {
 		t.Fatal("expected no subtitle streams", err)
 	}
+}
+
+func makeSubtitleContainer(t *testing.T, source string) string {
+	t.Helper()
+	dir := t.TempDir()
+	first := filepath.Join(dir, "en.srt")
+	second := filepath.Join(dir, "es.srt")
+	for path, text := range map[string]string{first: testTranscript, second: strings.ReplaceAll(testTranscript, "Goodbye", "Adios")} {
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(dir, "subtitled.mp4")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := runMediaTool(ctx, "ffmpeg", 4096, "-v", "error", "-nostdin", "-i", source, "-i", first, "-i", second, "-t", "2", "-map", "0:v:0", "-map", "0:a:0?", "-map", "1:0", "-map", "2:0", "-c:v", "libx264", "-threads", "1", "-c:a", "aac", "-c:s", "mov_text", "-metadata:s:s:0", "language=eng", "-metadata:s:s:0", "handler_name=English captions", "-metadata:s:s:1", "language=spa", "-metadata:s:s:1", "handler_name=Spanish captions", "-disposition:s:0", "default", "-disposition:s:1", "forced", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

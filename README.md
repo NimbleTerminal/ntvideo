@@ -154,6 +154,22 @@ frame, err := ntvideo.FrameAt(ctx, "movie.mp4", time.Second, ntvideo.HeadlessOpt
 // frame is an owned image.Image, suitable for PNG output, thumbnails or WithPoster.
 ```
 
+Opt into OS confinement for ffprobe/ffmpeg with ntmediabox:
+
+```go
+opts := ntvideo.HeadlessOptions{Sandbox: &ntvideo.HeadlessSandbox{}}
+info, err := ntvideo.Probe(ctx, "movie.mp4", opts)
+```
+
+The same option applies to `FrameAt`, `Frames`, and container `Cues`. Each tool
+can read the input and runtime libraries, but has no writable paths or network
+access. OS enforcement is required unless `AllowUnsandboxed` is explicitly set.
+Linux hosts must install `ntconfine-stage` beside their executable, or set
+`HeadlessSandbox.StagePath`; macOS uses sandbox-exec. A nil `Sandbox` keeps direct
+tool execution. Sidecar `Cues` and `ParseCues` still parse bounded text in the
+calling process. Deadlines, output limits, sparse seeks, and image ownership
+apply in both modes.
+
 `HeadlessOptions` accepts `Limits`, `Timeout`, and trusted executable paths
 `FFprobe`/`FFmpeg`. Missing tools and timestamps at/past EOF return errors. The
 viewer does not automatically spawn FFmpeg for a fallback; a host can obtain a
@@ -553,7 +569,9 @@ remains backend-specific.
 
 ## Security considerations
 
-Native media and external captions must be local regular files. URLs, mpv
+[SECURITY.md](SECURITY.md) is the perimeter for in-process playback, the
+ntmediabox worker, and headless tools. In short: native media and external
+captions must be local regular files. URLs, mpv
 pseudo-protocols, UNC paths, devices and directories are rejected. libmpv starts
 with `config=no`, `load-scripts=no`, `ytdl=no`, no default input bindings or OSC,
 no automatic subtitle/audio discovery, and `access-references=no`. FFmpeg
@@ -577,6 +595,15 @@ read that directory, the resolved video file, and ntconfine's default library
 and font directories. `WithLibraryPath` also grants read access to the resolved
 libmpv file and forwards its path through private staged settings. Library
 dependencies must be in permitted runtime directories.
+With `WithCaptionEvents(true)`, `ServeWorker` also parses staged SRT/WebVTT files
+in a short-lived confined helper. The host accepts only bounded, versioned cue
+metadata over ntmediabox and does not fall back to parsing sidecars itself.
+Caption parsing or metadata errors appear as `Status.CaptionCueErr` without
+stopping playback. Cue timelines are matched to explicit staged filenames, so
+a missing sidecar cannot shift the mapping onto another track. Rebuild the worker
+alongside the host when upgrading; custom
+workers using only `NewWorkerDecoder` with `ntmediabox.Serve` do not serve cue
+metadata. Use `ServeWorker` to support both protocols.
 
 Library paths and FFmpeg executable paths must come from trusted host settings.
 `PlayerOptions.LibraryPath` selects an explicit libmpv for `Player` or a custom
