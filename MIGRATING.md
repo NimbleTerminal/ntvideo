@@ -2,12 +2,24 @@
 
 ## Unreleased
 
+Native hosts can opt into OS-confined out-of-process playback with `WithWorker`
+and `ServeWorker` (or `NewWorkerDecoder`). A zero `WorkerConfig` requires OS
+confinement; Linux needs `ntconfine-stage` beside the host or an explicit
+`StagePath`, and Windows or other platforms without OS enforcement fail closed
+unless `AllowUnsandboxed` is set. `WithLibraryPath` also selects worker libmpv:
+its resolved file is readable inside the sandbox and its path is passed through
+private staged settings. Dependencies must be in permitted runtime directories.
+`PlayerOptions.LibraryPath` is the equivalent for direct `Player` and custom
+worker decoders. Requests may narrow, but cannot widen, limits configured in the
+worker's `PlayerOptions`. Worker mute/volume status follows host preferences,
+while audio remains disabled.
+
 Browser hosts using Booba must replace `github.com/NimbleMarkets/go-booba`
 imports and module requirements with `nimbleterminal.dev/booba` (v0.12.1).
 Rebuild WASM and refresh Booba and ntvideo assets together. Custom build scripts
 must copy Booba's `serve/static/ntwebterm/` runtime alongside `serve/static/booba/`.
-The Bubble Tea WASM replacement below remains required and unchanged. Public API
-signatures are unchanged.
+The Bubble Tea WASM replacement below remains required and unchanged. Existing
+API signatures are unchanged.
 
 ## Upgrading to v0.4.0
 

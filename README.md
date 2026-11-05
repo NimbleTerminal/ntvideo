@@ -568,8 +568,21 @@ the same defaults. Native dimensions are checked when metadata becomes available
 and playback is stopped if they exceed limits. Presentation rasters are capped
 at 960×540 pixels. These checks are **not a decoder sandbox**: native decoding
 can allocate memory before metadata arrives, and files can change after checking.
-For strict CPU/memory/filesystem isolation, run decoding in a constrained worker.
+For OS-confined out-of-process decoding, pass `WithWorker(WorkerConfig{...})` to
+`New`, and run `ServeWorker` (or `NewWorkerDecoder`) in the helper process via
+`nimbleterminal.dev/ntmediabox`. Worker playback runs with software decoding and
+audio disabled (`DisableHardwareDecoding: true`, `DisableAudio: true`). The wire
+carries bare filenames from a private staging directory. The process can also
+read that directory, the resolved video file, and ntconfine's default library
+and font directories. `WithLibraryPath` also grants read access to the resolved
+libmpv file and forwards its path through private staged settings. Library
+dependencies must be in permitted runtime directories.
+
 Library paths and FFmpeg executable paths must come from trusted host settings.
+`PlayerOptions.LibraryPath` selects an explicit libmpv for `Player` or a custom
+worker decoder. Worker volume and mute status reflect host preferences; its audio
+is always disabled. Hiding a worker-backed widget reduces its render target to
+1×1 without resuming playback when shown.
 
 `WithTranscript` renders a link only for http(s) or relative URLs. The example
 player strips terminal escape sequences from the source name and error text it

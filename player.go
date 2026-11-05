@@ -12,6 +12,8 @@ type PlayerOptions struct {
 	DisableHardwareDecoding bool   // software decoding only
 	DisableAudio            bool   // no audio output or decoding
 	Limits                  Limits // zero fields use the defaults
+	// LibraryPath selects a trusted libmpv shared library; empty uses loader defaults.
+	LibraryPath string
 }
 
 // Player is playback without a terminal or Bubble Tea, for hosts that present
@@ -48,7 +50,7 @@ func (p *Player) Load(path string) error {
 		return ErrClosed
 	}
 	if p.b == nil {
-		b, err := p.create(config{volume: 1, muted: p.opts.DisableAudio, disableHW: p.opts.DisableHardwareDecoding, disableAudio: p.opts.DisableAudio, limits: p.opts.Limits})
+		b, err := p.create(config{libraryPath: p.opts.LibraryPath, volume: 1, muted: p.opts.DisableAudio, disableHW: p.opts.DisableHardwareDecoding, disableAudio: p.opts.DisableAudio, limits: p.opts.Limits})
 		if err != nil {
 			return err
 		}

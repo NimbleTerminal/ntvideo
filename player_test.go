@@ -69,11 +69,11 @@ func TestPlayerForwardsToBackend(t *testing.T) {
 }
 
 func TestPlayerOptionsReachConfig(t *testing.T) {
-	p, _, c, _ := fakePlayer(t, PlayerOptions{DisableHardwareDecoding: true, DisableAudio: true})
+	p, _, c, _ := fakePlayer(t, PlayerOptions{DisableHardwareDecoding: true, DisableAudio: true, LibraryPath: "/trusted/libmpv"})
 	if err := p.Load("a.mp4"); err != nil {
 		t.Fatal(err)
 	}
-	if !c.disableHW || !c.disableAudio || !c.muted {
+	if !c.disableHW || !c.disableAudio || !c.muted || c.libraryPath != "/trusted/libmpv" {
 		t.Fatalf("config %+v", c)
 	}
 }
@@ -125,7 +125,7 @@ func TestPlayerRealPlayback(t *testing.T) {
 	if source == "" {
 		t.Skip("set NTVIDEO_TEST_FILE")
 	}
-	p := NewPlayer(PlayerOptions{DisableHardwareDecoding: true, DisableAudio: true})
+	p := NewPlayer(PlayerOptions{DisableHardwareDecoding: true, DisableAudio: true, LibraryPath: "/trusted/libmpv"})
 	defer p.Close()
 	if err := p.Load(source); err != nil {
 		t.Fatal(err)

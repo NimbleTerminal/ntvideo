@@ -34,6 +34,7 @@ type mpvBackend struct {
 	tracksAt         time.Time
 	audio, subtitles []Track
 	cueFiles         map[string]nativeCueFile
+	captionFiles     map[string]string
 	cueSeekSerial    uint64
 }
 
@@ -202,6 +203,7 @@ func (b *mpvBackend) Load(s Source) error {
 	b.captions = s.Captions
 	b.audio = nil
 	b.subtitles = nil
+	b.captionFiles = nil
 	if err := b.command("loadfile", s.URL, "replace"); err != nil {
 		b.loading = false
 		return err
@@ -364,6 +366,7 @@ func (b *mpvBackend) Poll() (Status, error) {
 	if time.Since(b.tracksAt) > time.Second {
 		b.audio = nil
 		b.subtitles = nil
+		b.captionFiles = make(map[string]string)
 		for i, n := 0, min(128, int(b.number("track-list/count"))); i < n; i++ {
 			p := fmt.Sprintf("track-list/%d/", i)
 			kind := b.text(p + "type")
@@ -375,6 +378,7 @@ func (b *mpvBackend) Poll() (Status, error) {
 				b.audio = append(b.audio, t)
 			} else if kind == "sub" {
 				t.Kind = "subtitles"
+				b.captionFiles[t.ID] = b.text(p + "external-filename")
 				b.subtitles = append(b.subtitles, t)
 			}
 		}
@@ -388,6 +392,7 @@ func (b *mpvBackend) Poll() (Status, error) {
 	}
 	s.AudioTracks = append([]Track(nil), b.audio...)
 	s.CaptionTracks = append([]Track(nil), b.subtitles...)
+	s.captionFiles = b.captionFiles
 	b.captionSnapshot(&s)
 	if b.loaded && !b.seekPending {
 		s.CaptionText = captionPlainText(b.text("sub-text"))

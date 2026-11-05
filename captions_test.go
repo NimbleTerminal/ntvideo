@@ -88,3 +88,14 @@ func TestCaptionTextChangesAndClearing(t *testing.T) {
 		}
 	}
 }
+
+func TestCaptionPlainTextRemovesBidiControls(t *testing.T) {
+	for _, r := range []rune{'\u061c', '\u200e', '\u200f', '\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069'} {
+		if got := captionPlainText("left" + string(r) + "right"); got != "leftright" {
+			t.Fatalf("accepted U+%04X: %q", r, got)
+		}
+	}
+	if got := captionPlainText("مرحبا 世界"); got != "مرحبا 世界" {
+		t.Fatalf("altered ordinary Unicode text: %q", got)
+	}
+}

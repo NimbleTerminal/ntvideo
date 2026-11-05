@@ -2,38 +2,8 @@
 
 package ntvideo
 
-import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
-)
+import "fmt"
 
-type nativeCueFile struct {
-	timeline *cueTimeline
-	err      error
-}
-
-func readCueFile(path string) nativeCueFile {
-	ext := strings.ToLower(filepath.Ext(path))
-	if ext != ".srt" && ext != ".vtt" {
-		return nativeCueFile{}
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nativeCueFile{err: err}
-	}
-	defer f.Close()
-	format := CueSRT
-	if ext == ".vtt" {
-		format = CueWebVTT
-	}
-	cues, err := ParseCues(f, format)
-	if err != nil {
-		return nativeCueFile{err: err}
-	}
-	return nativeCueFile{timeline: newCueTimeline(cues)}
-}
 func (b *mpvBackend) captionSnapshot(s *Status) {
 	if !b.cfg.captionEvents || !b.loaded || b.seekPending {
 		return

@@ -62,7 +62,7 @@ func (e *engine) sample(w, h int) (s Status, img image.Image) {
 		if len(pending) == 0 {
 			return Status{State: Idle, Volume: e.cfg.volume, Muted: e.cfg.muted}, nil
 		}
-		e.b, err = newBackend(e.cfg)
+		e.b, err = createBackend(e.cfg)
 		if err != nil {
 			e.queueMu.Lock()
 			if errors.Is(err, ErrUnsupported) {

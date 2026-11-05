@@ -51,6 +51,9 @@ type Status struct {
 	CaptionCuesAvailable bool
 	CaptionCueErr        error
 	cueData              *cueSnapshot
+	// captionFiles is an immutable backend snapshot: track ID to external path,
+	// or an empty path for embedded subtitles. It never crosses the public API.
+	captionFiles map[string]string
 	// CaptionText is the current plain subtitle text from the native backend.
 	// Bitmap subtitles and browser playback do not supply text here.
 	CaptionText                string
@@ -92,6 +95,9 @@ type config struct {
 	libraryPath                   string
 	limits                        Limits
 	disableHW, disableAudio       bool // Player only
+	useWorker                     bool
+	worker                        WorkerConfig
+	workerStart                   workerStarter
 }
 type Option func(*config)
 
@@ -135,7 +141,9 @@ func WithTerminalSession(s *ntpicture.TerminalSession) Option {
 // The default is ntpicture.NextImageID.
 func WithImageIDAllocator(f func() (int, error)) Option { return func(c *config) { c.nextID = f } }
 
-// WithLibraryPath selects an explicit trusted libmpv shared library. Empty uses
+// WithLibraryPath selects an explicit trusted libmpv shared library. Worker
+// playback forwards the resolved file through private settings and grants it
+// read access. Dependencies must be in permitted runtime directories. Empty uses
 // platform defaults. Loading happens only when media is first sampled.
 func WithLibraryPath(path string) Option { return func(c *config) { c.libraryPath = path } }
 func WithLimits(l Limits) Option         { return func(c *config) { c.limits = l } }
