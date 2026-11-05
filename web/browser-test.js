@@ -43,7 +43,7 @@ try{
  await page.waitForFunction(()=>[...document.querySelector('video').textTracks].every(t=>t.mode==='disabled'));
  await page.keyboard.press('Space');
  await page.waitForFunction(()=>!document.querySelector('video').paused);
- await page.keyboard.press('C');
+ await page.keyboard.press('Shift+c');
  await page.waitForFunction(()=>{const v=document.querySelector('video');return v.paused&&v.parentElement.hidden;});
  await page.keyboard.press('ArrowDown');
  await page.keyboard.press('ArrowDown');

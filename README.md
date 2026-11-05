@@ -376,10 +376,11 @@ The example uses this mode: click the terminal and press Space to play/pause,
 or use its terminal controls. Autoplay and programmatic play can be rejected by
 browser policy; rejection is reported through `Status.Err`.
 
-The build copies go-booba's pinned browser assets from its Go module cache. The
-library does not depend on go-booba. The example's separate module does.
+The build copies Booba's (`nimbleterminal.dev/booba`) pinned browser assets from
+its Go module cache, including the ntwebterm runtime. The library does not depend
+on Booba. The example's separate module does.
 Upstream Bubble Tea v2 currently lacks the required js/wasm platform files; this
-repository and go-booba use the same fork. **Downstream WASM applications must
+repository and Booba use the same fork. **Downstream WASM applications must
 include this replacement in their own go.mod**, because Go does not inherit
 replacements from dependencies:
 
@@ -420,7 +421,7 @@ Construct the widget with `WithHost("terminal")` to match the registered ID.
 serve assets directly. It contains runtime files only.
 
 Load `ntvideo/surface.js` and register a host before initializing the widget. See
-`web/index.html` for the go-booba integration. The host measures the content
+`web/index.html` for the Booba integration. The host measures the content
 canvas in CSS pixels and supplies clipping and visibility. Applications must
 call `SetBounds` whenever layout changes; strings alone cannot reveal a widget's
 location in an arbitrarily composed terminal view.

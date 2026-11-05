@@ -5,7 +5,7 @@ package main
 import (
 	tea "charm.land/bubbletea/v2"
 	"encoding/json"
-	"github.com/NimbleMarkets/go-booba/wasm"
+	"nimbleterminal.dev/booba/wasm"
 	"nimbleterminal.dev/ntvideo"
 	"syscall/js"
 )

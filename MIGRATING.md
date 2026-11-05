@@ -1,5 +1,14 @@
 # Migration guide
 
+## Unreleased
+
+Browser hosts using Booba must replace `github.com/NimbleMarkets/go-booba`
+imports and module requirements with `nimbleterminal.dev/booba` (v0.12.1).
+Rebuild WASM and refresh Booba and ntvideo assets together. Custom build scripts
+must copy Booba's `serve/static/ntwebterm/` runtime alongside `serve/static/booba/`.
+The Bubble Tea WASM replacement below remains required and unchanged. Public API
+signatures are unchanged.
+
 ## Upgrading to v0.4.0
 
 Existing APIs are unchanged; `Player` is new and optional. Browser hosts must

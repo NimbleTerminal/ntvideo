@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## Unreleased (2026-11-04)
+
+ * Migrate the browser player to `nimbleterminal.dev/booba` v0.12.1 and copy its ntwebterm runtime assets. Rebuild WASM and re-export browser assets together.
+ * Update ntpicture to v0.1.5, goffi to v0.6.8, and terminfo to v1.3.1. Public API signatures are unchanged.
+
 ## v0.4.0 (2026-11-01)
 
  * Add `Player`: native playback for hosts that present frames themselves, with no terminal or Bubble Tea.

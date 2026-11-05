@@ -12,7 +12,7 @@ export function registerHost(id, measure) {
   };
 }
 
-// Register an initialized go-booba BoobaTerminal. Geometry is re-read by each
+// Register an initialized Booba BoobaTerminal. Geometry is re-read by each
 // surface's animation frame, so CSS zoom, resize and page movement need no extra
 // listeners. This helper supports alternate-screen terminals; inline scrollback
 // hosts should use registerHost with their own anchoring policy.
