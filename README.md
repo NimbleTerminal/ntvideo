@@ -594,7 +594,10 @@ carries bare filenames from a private staging directory. The process can also
 read that directory, the resolved video file, and ntconfine's default library
 and font directories. `WithLibraryPath` also grants read access to the resolved
 libmpv file and forwards its path through private staged settings. Library
-dependencies must be in permitted runtime directories.
+dependencies must be in permitted runtime directories. On macOS, the worker
+also has read access to the system `/private/etc/ssl/openssl.cnf` file for
+LibreSSL initialization. Connection failures include captured, bounded worker
+stderr with terminal control characters stripped.
 With `WithCaptionEvents(true)`, `ServeWorker` also parses staged SRT/WebVTT files
 in a short-lived confined helper. The host accepts only bounded, versioned cue
 metadata over ntmediabox and does not fall back to parsing sidecars itself.

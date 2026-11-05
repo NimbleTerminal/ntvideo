@@ -1,6 +1,7 @@
 package ntvideo
 
 import (
+	"errors"
 	"image"
 	"image/color"
 	"io"
@@ -339,7 +340,7 @@ func TestWorkerBackendHelperDeathReportsFailed(t *testing.T) {
 				create: func(config) (backend, error) { return inner, nil },
 			}
 			go serveWorker(b, mediaDir, func(string) (ntmediabox.Decoder, error) { return dec, nil })
-			return a, func() error {
+			return &workerConn{ReadWriteCloser: a, stderr: func() string { return "decoder startup denied" }}, func() error {
 				select {
 				case closedCount <- struct{}{}:
 				default:
@@ -369,6 +370,9 @@ func TestWorkerBackendHelperDeathReportsFailed(t *testing.T) {
 	for time.Now().Before(deadline) {
 		s, err := wb.Poll()
 		if s.State == Failed && err != nil {
+			if !strings.Contains(err.Error(), "decoder startup denied") {
+				t.Fatalf("missing worker diagnostics: %v", err)
+			}
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -530,5 +534,38 @@ func testMPVWorkerPlayback(t *testing.T, libraryPath string) {
 	}
 	if !gotStatus.CaptionCuesAvailable || gotStatus.cueData == nil || gotStatus.cueData.timeline == nil || len(gotStatus.cueData.timeline.cues) != 1 || gotStatus.cueData.timeline.cues[0].Text != "sandboxed subtitle" {
 		t.Fatalf("expected sidecar cue timeline to be available: %+v", gotStatus)
+	}
+}
+
+func TestWorkerConnDiagnosticsPreserveEOF(t *testing.T) {
+	for _, detail := range []string{"", "  startup denied\n"} {
+		a, b := net.Pipe()
+		c := &workerConn{ReadWriteCloser: a, stderr: func() string { return detail }}
+		_ = b.Close()
+		_, err := c.Read(make([]byte, 1))
+		_ = c.Close()
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("lost EOF: %v", err)
+		}
+		if detail == "" && err != io.EOF {
+			t.Fatalf("empty diagnostics changed error: %v", err)
+		}
+		if detail != "" && !strings.HasSuffix(err.Error(), "worker stderr: startup denied") {
+			t.Fatalf("missing trimmed diagnostics: %v", err)
+		}
+	}
+}
+
+func TestWorkerPolicySystemConfig(t *testing.T) {
+	const config = "/private/etc/ssl/openssl.cnf"
+	base := ntmediabox.DefaultPolicy("/worker", "/media", "/video.mp4", "")
+	got := workerPolicy("/worker", "/media", "/video.mp4", "")
+	if runtime.GOOS == "darwin" {
+		if st, err := os.Stat(config); err == nil && st.Mode().IsRegular() {
+			base.ReadPaths = append(base.ReadPaths, config)
+		}
+	}
+	if !slices.Equal(got.ReadPaths, base.ReadPaths) || len(got.WritePaths) != 0 || got.AllowUnsandboxed {
+		t.Fatalf("unexpected worker permissions: %+v", got)
 	}
 }

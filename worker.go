@@ -110,7 +110,7 @@ func defaultWorkerStarter(cfg config, mediaDir, resolvedVideo string) (io.ReadWr
 	if err != nil {
 		return nil, nil, err
 	}
-	pol := ntmediabox.DefaultPolicy(workerPath, mediaDir, resolvedVideo, libraryPath)
+	pol := workerPolicy(workerPath, mediaDir, resolvedVideo, libraryPath)
 	pol.AllowUnsandboxed = cfg.worker.AllowUnsandboxed
 	args := make([]string, 0, len(cfg.worker.WorkerArgs)+1)
 	args = append(args, cfg.worker.WorkerArgs...)
@@ -124,7 +124,37 @@ func defaultWorkerStarter(cfg config, mediaDir, resolvedVideo string) (io.ReadWr
 	if err != nil {
 		return nil, nil, err
 	}
-	return h.Conn, h.Close, nil
+	return &workerConn{ReadWriteCloser: h.Conn, stderr: h.Stderr}, h.Close, nil
+}
+
+// workerPolicy adds only the system configuration file used by macOS
+// LibreSSL during libmpv startup. Never grant its enclosing directory.
+func workerPolicy(workerPath, mediaDir, resolvedVideo, libraryPath string) ntmediabox.Policy {
+	pol := ntmediabox.DefaultPolicy(workerPath, mediaDir, resolvedVideo, libraryPath)
+	if runtime.GOOS == "darwin" {
+		const config = "/private/etc/ssl/openssl.cnf"
+		if st, err := os.Stat(config); err == nil && st.Mode().IsRegular() {
+			pol.ReadPaths = append(pol.ReadPaths, config)
+		}
+	}
+	return pol
+}
+
+// workerConn retains the helper's bounded, control-stripped diagnostics when
+// its protocol connection fails. Preserve the transport error for errors.Is.
+type workerConn struct {
+	io.ReadWriteCloser
+	stderr func() string
+}
+
+func (c *workerConn) Read(p []byte) (int, error) {
+	n, err := c.ReadWriteCloser.Read(p)
+	if err != nil {
+		if detail := strings.TrimSpace(c.stderr()); detail != "" {
+			err = fmt.Errorf("%w; worker stderr: %s", err, detail)
+		}
+	}
+	return n, err
 }
 
 type workerBackend struct {

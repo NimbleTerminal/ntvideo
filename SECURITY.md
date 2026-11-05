@@ -72,7 +72,10 @@ start with `-`, or contain C0 or C1 controls are rejected.
 
 The process policy is `ntmediabox.DefaultPolicy` for the worker binary, the
 staging directory, the resolved video, and an explicitly configured libmpv file.
-That policy adds ntconfine's default library, loader, and font directories, sets no writable paths, and leaves
+On macOS, ntvideo also grants read access to the regular system file
+`/private/etc/ssl/openssl.cnf` for LibreSSL initialization, never its enclosing
+directory. Connection failures may include the helper's bounded, control-stripped
+stderr. That policy adds ntconfine's default library, loader, and font directories, sets no writable paths, and leaves
 `AllowUnsandboxed` false unless the host set it. Directory entries on the read
 list are readable as trees; file entries are the literal path. The staging
 directory is also an argument to the worker, so it is visible in process

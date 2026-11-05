@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.5.1 (2026-11-05)
+
+ * Fix confined playback on macOS when LibreSSL needs its system OpenSSL configuration; grant read access to that file only.
+ * Include bounded, control-stripped worker stderr in protocol connection failures so startup errors are actionable.
+
 ## v0.5.0 (2026-11-05)
 
  * Add opt-in `WithWorker`, `ServeWorker`, and `NewWorkerDecoder` for OS-confined out-of-process playback and caption-cue metadata through `nimbleterminal.dev/ntmediabox` v0.1.0 and `nimbleterminal.dev/ntconfine` v0.1.1.
