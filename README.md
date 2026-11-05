@@ -9,7 +9,7 @@ half-block rendering. Audio belongs to the browser or the OS media backend.
 
 This is an experimental MVP, with a portable public API offering native and browser playback.
 
-For v0.4.0 changes, see the [changelog](CHANGELOG.md) and
+For v0.5.0 changes, see the [changelog](CHANGELOG.md) and
 [migration guide](MIGRATING.md). Hosts upgrading from v0.1.0 must also account
 for the v0.2.0 `Model.Close` API change.
 

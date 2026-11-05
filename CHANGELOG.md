@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased (2026-11-04)
+## v0.5.0 (2026-11-05)
 
  * Add opt-in `WithWorker`, `ServeWorker`, and `NewWorkerDecoder` for OS-confined out-of-process playback and caption-cue metadata through `nimbleterminal.dev/ntmediabox` v0.1.0 and `nimbleterminal.dev/ntconfine` v0.1.1.
  * Add opt-in `HeadlessOptions.Sandbox` confinement through ntmediabox for ffprobe/ffmpeg, preserving deadlines, output bounds, and sparse frame extraction, and fix a subprocess output-limit bypass through `bytes.Buffer.ReadFrom`.
