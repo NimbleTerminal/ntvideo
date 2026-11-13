@@ -1,6 +1,8 @@
 package ntvideo
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"image"
 	"image/color"
@@ -534,6 +536,85 @@ func testMPVWorkerPlayback(t *testing.T, libraryPath string) {
 	}
 	if !gotStatus.CaptionCuesAvailable || gotStatus.cueData == nil || gotStatus.cueData.timeline == nil || len(gotStatus.cueData.timeline.cues) != 1 || gotStatus.cueData.timeline.cues[0].Text != "sandboxed subtitle" {
 		t.Fatalf("expected sidecar cue timeline to be available: %+v", gotStatus)
+	}
+
+	p := NewPlayer(PlayerOptions{
+		CaptionEvents:     true,
+		SuppressSubtitles: true,
+		Worker:            &wcfg,
+	})
+	defer p.Close()
+	if err := p.LoadSource(Source{
+		URL:      source,
+		Captions: []Caption{{Source: srtPath, Data: []byte("1\n00:00:00,000 --> 00:00:01,000\nboth\n")}},
+	}); err == nil {
+		t.Fatal("expected error when both Source and Data are set")
+	}
+	if err := p.LoadSource(Source{
+		URL:      source,
+		Captions: []Caption{{Data: []byte("1\n00:00:00,000 --> 00:00:02,000\ninline worker cue\n"), Default: true}},
+	}); err != nil {
+		t.Fatalf("Player.LoadSource inline worker caption failed: %v", err)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	var playerTL *CueTimeline
+	for time.Now().Before(deadline) {
+		if _, err := p.Frame(160, 90); err != nil {
+			t.Fatalf("Player.Frame failed: %v", err)
+		}
+		playerTL, _ = p.CueTimeline()
+		if playerTL != nil {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if playerTL == nil || playerTL.Len() != 1 || playerTL.Cues()[0].Text != "inline worker cue" {
+		t.Fatalf("expected inline worker cue timeline via Player, got %v", playerTL)
+	}
+
+	// Invalid cue timing in inline bytes must never be parsed in the host or abort
+	// video playback; the confined helper rejects it and surfaces CaptionCueErr on Status.
+	if err := p.LoadSource(Source{
+		URL:      source,
+		Captions: []Caption{{Data: []byte("1\n00:00:02,000 --> 00:00:01,000\nbad timing\n"), Format: CueSRT, Default: true}},
+	}); err != nil {
+		t.Fatalf("invalid inline caption must not abort LoadSource: %v", err)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	var corruptCueErr error
+	for time.Now().Before(deadline) {
+		s, err := p.Status()
+		if err != nil {
+			t.Fatalf("Status failed on invalid inline caption: %v", err)
+		}
+		if s.CaptionCueErr != nil {
+			corruptCueErr = s.CaptionCueErr
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if corruptCueErr == nil {
+		t.Fatal("expected CaptionCueErr from confined worker on invalid inline SRT")
+	}
+
+	// Standalone confined cue parsing runs in ServeWorker without a video or libmpv.
+	confinedTL, err := ParseCueTimelineConfined(
+		context.Background(),
+		strings.NewReader("1\n00:00:00,250 --> 00:00:01,500\n<b>Never</b> gonna give you up\n"),
+		CueAuto,
+		wcfg,
+	)
+	if err != nil {
+		t.Fatalf("ParseCueTimelineConfined failed: %v", err)
+	}
+	if confinedTL.Len() != 1 || confinedTL.Cues()[0].Text != "Never gonna give you up" {
+		t.Fatalf("unexpected confined timeline: %+v", confinedTL.Cues())
+	}
+	if _, err := ParseCuesConfined(context.Background(), strings.NewReader("not an srt"), CueAuto, wcfg); err == nil {
+		t.Fatal("expected ParseCuesConfined to reject malformed SRT")
+	}
+	if _, err := ParseCuesConfined(context.Background(), bytes.NewReader([]byte{0xff, 0xfe, 0xfd}), CueAuto, wcfg); err == nil {
+		t.Fatal("expected ParseCuesConfined to reject invalid UTF-8 bytes")
 	}
 }
 

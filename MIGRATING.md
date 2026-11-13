@@ -1,5 +1,15 @@
 # Migration guide
 
+## Unreleased
+
+Existing public API signatures are unchanged. New cue-timeline, overlay, caption-mode, and `Player` capabilities are additive:
+
+- Headless and node-graph hosts can parse SRT or WebVTT with `CueAuto` (`ParseCues(r, ntvideo.CueAuto)` / `ParseCueTimeline`), or confine untrusted subtitle parsing out-of-process without `libmpv` via `ParseCuesConfined` / `ParseCueTimelineConfined`, and drive boundary events or random-access lookups with `CueTimeline` (`ActiveAt`) and `CueCursor` (`Observe`, `Seek`, `SetTimeline`, `Active`, `Reset`).
+- Embedded or in-memory SRT/WebVTT captions can be supplied via `Caption{Data: bytes, Format: ntvideo.CueAuto}` (at most 4 MiB; mutually exclusive with `Source`). Native staging checks only size and format-flag bounds in the host; worker playback parses staged sidecars exclusively inside the confined helper and reports parse failures via `Status.CaptionCueErr` without stopping playback.
+- Hosts rendering custom terminal caption animations over native video can pass `WithCaptionRenderMode(ntvideo.CaptionRenderHost)` to suppress `libmpv` subtitle rasterization without drawing `ntvideo`'s built-in plain caption box, inspect `Model.Ready()` instead of snooping `ntpicture.PresentedMsg`, and composite styled cells safely over Kitty placeholders with `OverlayCells` and `SpliceRows`.
+- `PlayerOptions` now accepts `Worker`, `Loop`, `CaptionEvents`, and `SuppressSubtitles`; `Player` adds `LoadSource`, `SelectTrack`, `SetSuppressSubtitles`, `CueTimeline`, and `Step`.
+- Rebuild WASM and refresh Booba (`v0.13.0`) and `ntvideo` assets together when upgrading browser hosts.
+
 ## Upgrading to v0.5.0
 
 Native hosts can opt into OS-confined out-of-process playback with `WithWorker`

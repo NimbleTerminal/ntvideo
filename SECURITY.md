@@ -64,7 +64,8 @@ entry is a symlink to the validated file, a hard link when symlink creation
 fails, or a bounded `0600` copy if both link methods fail. The original file stays
 on the worker's read policy for the life of the helper. Later writes to it are
 visible through a symlink or hard link; copy fallback presents the copied bytes.
-Up to 16 caption sidecars are copied into the directory (mode `0600`, at most 4 MiB
+Up to 16 caption sidecars are copied (from validated local files or bounded
+inline `Caption.Data` bytes, without host-side parsing) into the directory (mode `0600`, at most 4 MiB
 each, and never more than the active file limit). Only those bare names cross
 the ntmediabox connection. Names that are empty, longer than 255 bytes, not
 `filepath.Base` of themselves, contain `/`, `\`, or `:`, are `.` or `..`,
@@ -185,8 +186,14 @@ of guessing. This does not authenticate an already compromised helper's claims.
 worker with the host after an upgrade so both sides share the metadata version.
 
 In-process playback parses the same sidecar limits in the host. `ParseCues`
-does too. WebVTT timestamp maps are rejected. Errors return no partial
-transcript. Parsing errors do not stop playback.
+does too. For standalone untrusted SRT/WebVTT streams without video playback,
+`ParseCuesConfined` and `ParseCueTimelineConfined` stage at most 4 MiB of raw
+bytes without host-side parsing, run `ServeWorker` in a short-lived confined
+`ntmediabox` helper with read access only to the worker binary, the private
+staging directory, and runtime libraries (no video file, writable paths, or
+network), and validate the response with `decodeWorkerCues`. WebVTT timestamp
+maps are rejected. Errors return no partial transcript. Parsing errors during
+playback do not stop video playback.
 
 ## Headless probe, frames, and transcripts
 

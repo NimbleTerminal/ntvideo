@@ -35,6 +35,8 @@ type Model struct {
 	waitGeneration                          uint64
 	pictureCommands                         []tea.Cmd
 	kept                                    bool
+	ready, hasMediaGen                      bool
+	mediaGen                                uint64
 	cues                                    cueScheduler
 	cueVersion, cueSource                   uint64
 	cueReason                               CueReason
@@ -137,6 +139,8 @@ func (m *Model) Load(s Source) {
 	m.cfg.source = s
 	m.status.CaptionText = ""
 	m.scrubbing = false
+	m.ready = false
+	m.hasMediaGen = false
 	m.epoch++
 	if s.URL == "" {
 		m.status.State = Idle
@@ -248,6 +252,7 @@ func (m *Model) next() tea.Cmd {
 }
 func statusEqual(a, b Status) bool {
 	return a.CaptionCuesAvailable == b.CaptionCuesAvailable && errorEqual(a.CaptionCueErr, b.CaptionCueErr) && a.CaptionText == b.CaptionText && a.State == b.State && a.CurrentTime == b.CurrentTime && a.Duration == b.Duration &&
+		a.Width == b.Width && a.Height == b.Height && a.FPS == b.FPS &&
 		a.Volume == b.Volume && a.Muted == b.Muted && errorEqual(a.Err, b.Err) &&
 		slices.Equal(a.AudioTracks, b.AudioTracks) && slices.Equal(a.CaptionTracks, b.CaptionTracks)
 }
@@ -295,6 +300,9 @@ func (m *Model) Update(msg tea.Msg) (cmd tea.Cmd) {
 		var event tea.Cmd
 		changed := !statusEqual(m.status, msg.status)
 		m.status = msg.status
+		if m.dom && m.cfg.source.URL != "" && (msg.status.State == Paused || msg.status.State == Playing || msg.status.State == Buffering || msg.status.State == Ended) {
+			m.ready = true
+		}
 		if changed {
 			id, status := m.ID(), m.Status()
 			event = func() tea.Msg { return EventMsg{id, status} }
@@ -309,8 +317,16 @@ func (m *Model) Update(msg tea.Msg) (cmd tea.Cmd) {
 		}
 		m.busy = false
 		cmd := m.pic.SetImageImmutable(msg.frame)
-		m.awaiting = m.pic.Status().Busy
-		m.waitGeneration = m.pic.Status().Generation
+		picStatus := m.pic.Status()
+		m.awaiting = picStatus.Busy
+		m.waitGeneration = picStatus.Generation
+		if m.cfg.source.URL != "" {
+			m.mediaGen = picStatus.Generation
+			m.hasMediaGen = true
+			if !m.awaiting && picStatus.Presented == picStatus.Generation {
+				m.ready = true
+			}
+		}
 		if !m.awaiting {
 			return tea.Batch(pictureCmd, event, cmd, m.next())
 		}
@@ -318,6 +334,9 @@ func (m *Model) Update(msg tea.Msg) (cmd tea.Cmd) {
 	case ntpicture.PresentedMsg:
 		if msg.Owner == m.pic && msg.Generation == m.pic.Status().Generation {
 			m.transport = kittyTransport(m.pic.Status())
+			if m.hasMediaGen && msg.Generation >= m.mediaGen && m.cfg.source.URL != "" {
+				m.ready = true
+			}
 			if m.awaiting {
 				m.awaiting = false
 				return tea.Batch(pictureCmd, m.next())
@@ -384,7 +403,7 @@ func (m *Model) mediaView() string {
 	}
 	if (m.visible || m.kept) && !m.dom {
 		if s := m.pic.View(); s != "" {
-			if m.cfg.nativeCaptionOverlay {
+			if m.CaptionRenderMode() == CaptionRenderPlain {
 				return overlayCaptions(s, m.status.CaptionText, r.Cols, r.Rows)
 			}
 			return s
@@ -418,6 +437,8 @@ func (m *Model) Release() error {
 	}
 	m.resetCues(CueClose)
 	m.closed = true
+	m.ready = false
+	m.hasMediaGen = false
 	m.epoch++
 	m.status.State = Closed
 	return m.engine.close()
@@ -458,6 +479,9 @@ func (m *Model) Session() *ntpicture.TerminalSession { return m.pic.Session() }
 func (m *Model) Position() time.Duration             { return m.status.CurrentTime }
 func (m *Model) Duration() time.Duration             { return m.status.Duration }
 
+// Ready reports whether the current source has presented its first media frame
+// (excluding static posters), or reached a loaded playback state in browsers.
+func (m *Model) Ready() bool            { return !m.closed && m.ready }
 func (m *Model) Closed() bool           { return m.closed }
 func (m *Model) Visible() bool          { return m.visible }
 func (m *Model) Size() (cols, rows int) { return m.cfg.bounds.Cols, m.cfg.bounds.Rows }

@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -135,4 +139,122 @@ func (b *workerBackend) loadWorkerCues(parent context.Context, dir, video string
 		}
 	}
 	return files
+}
+
+// ParseCuesConfined parses bounded SRT or WebVTT bytes from r inside a
+// short-lived OS-confined ServeWorker helper over ntmediabox without loading
+// libmpv or parsing subtitle contents in the host process. A zero WorkerConfig
+// fails closed with ntmediabox.ErrUnavailable when OS sandboxing is unavailable.
+func ParseCuesConfined(ctx context.Context, r io.Reader, format CueFormat, cfg WorkerConfig) ([]CaptionCue, error) {
+	tl, err := ParseCueTimelineConfined(ctx, r, format, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return tl.Cues(), nil
+}
+
+// ParseCueTimelineConfined parses bounded SRT or WebVTT bytes from r inside a
+// short-lived OS-confined ServeWorker helper and returns an immutable
+// CueTimeline validated by the hostile-peer metadata decoder.
+func ParseCueTimelineConfined(ctx context.Context, r io.Reader, format CueFormat, cfg WorkerConfig) (*CueTimeline, error) {
+	if runtime.GOOS == "js" {
+		return nil, ErrUnsupported
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if format != CueSRT && format != CueWebVTT && format != CueAuto {
+		return nil, fmt.Errorf("ntvideo: unsupported cue format %q", format)
+	}
+	if r == nil {
+		return nil, errors.New("ntvideo: nil cue reader")
+	}
+	dctx, cancel := (HeadlessOptions{}).deadline(ctx)
+	defer cancel()
+
+	data, err := io.ReadAll(io.LimitReader(cueContextReader{ctx: dctx, r: r}, maxCueBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	ext, err := stageInlineCaptionExt(Caption{Data: data, Format: format}, maxCueBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	var workerPath string
+	if cfg.WorkerPath != "" {
+		workerPath, err = ntmediabox.VerifyBinary(cfg.WorkerPath)
+	} else {
+		workerPath, err = ntmediabox.ResolveSibling("ntvideo-worker")
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rawDir, err := os.MkdirTemp("", "ntvideo-cues-")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(rawDir) }()
+	mediaDir, err := filepath.EvalSymlinks(rawDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = os.RemoveAll(mediaDir) }()
+	if err := os.Chmod(mediaDir, 0o700); err != nil {
+		return nil, err
+	}
+	subName := "sub-0" + ext
+	if err := writeWorkerBytes(filepath.Join(mediaDir, subName), data, maxCueBytes); err != nil {
+		return nil, err
+	}
+
+	pol := ntmediabox.DefaultPolicy(workerPath, mediaDir)
+	pol.AllowUnsandboxed = cfg.AllowUnsandboxed
+	args := make([]string, 0, len(cfg.WorkerArgs)+1)
+	args = append(args, slices.Clone(cfg.WorkerArgs)...)
+	args = append(args, mediaDir)
+	h, err := ntmediabox.StartHelper(ntmediabox.HelperConfig{
+		Policy:     pol,
+		WorkerPath: workerPath,
+		WorkerArgs: args,
+		StagePath:  cfg.StagePath,
+	})
+	if err != nil {
+		return nil, err
+	}
+	conn := &workerConn{ReadWriteCloser: h.Conn, stderr: h.Stderr}
+	var once sync.Once
+	closeHelper := func() {
+		once.Do(func() {
+			_ = conn.Close()
+			_ = h.Close()
+		})
+	}
+	defer closeHelper()
+
+	client := ntmediabox.NewRenderClientWithKill(conn, closeHelper)
+	defer client.Close()
+
+	resp, err := client.Do(dctx, ntmediabox.RenderRequest{
+		Kind:      "video-caption-cues",
+		Name:      subName,
+		Width:     1,
+		Height:    1,
+		MaxPixels: 1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ntvideo: worker captions: %w", err)
+	}
+	if resp.Ended || resp.Image != nil {
+		return nil, errors.New("ntvideo: invalid worker cue response")
+	}
+	inner, err := decodeWorkerCues(resp.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("ntvideo: worker captions: %w", err)
+	}
+	return &CueTimeline{inner: inner}, nil
 }

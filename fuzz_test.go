@@ -37,7 +37,7 @@ func FuzzParseCues(f *testing.F) {
 	f.Add([]byte("1\n00:00:00,000 --> 00:00:01,000\n\x1b[31mred\u202ebidi\x00ctrl\n"))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		for _, format := range []CueFormat{CueSRT, CueWebVTT} {
+		for _, format := range []CueFormat{CueSRT, CueWebVTT, CueAuto} {
 			cues, err := ParseCues(bytes.NewReader(data), format)
 			if err != nil {
 				continue
@@ -155,6 +155,8 @@ func FuzzCaptionPlainTextAndOverlay(f *testing.F) {
 		w := min(max(width, -2), 120)
 		h := min(max(height, -2), 40)
 		_ = overlayCaptions(video, text, w, h)
+		_ = OverlayCells(video, w, h, []OverlayCell{{X: 1, Y: 0, Symbol: text, Bold: true}})
+		_ = SpliceRows(video, text, w, h, h/2)
 	})
 }
 

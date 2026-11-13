@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,6 +22,7 @@ type mpvBackend struct {
 	lib              *mpvLibrary
 	cfg              config
 	stop, done       chan struct{}
+	wakeRender       chan struct{}
 	mu               sync.Mutex // Protects only frame exchange; renderer never waits on control APIs.
 	width, height    int
 	latest           image.Image
@@ -35,6 +38,7 @@ type mpvBackend struct {
 	audio, subtitles []Track
 	cueFiles         map[string]nativeCueFile
 	captionFiles     map[string]string
+	inlineDir        string
 	cueSeekSerial    uint64
 }
 
@@ -51,7 +55,7 @@ func newBackend(c config) (backend, error) {
 		lib.close()
 		return nil, err
 	}
-	b := &mpvBackend{lib: lib, handle: handle, cfg: c, stop: make(chan struct{}), done: make(chan struct{}), width: 480, height: 320}
+	b := &mpvBackend{lib: lib, handle: handle, cfg: c, stop: make(chan struct{}), done: make(chan struct{}), wakeRender: make(chan struct{}, 1), width: 480, height: 320}
 	if b.handle == nil {
 		lib.close()
 		return nil, errors.New("ntvideo: could not allocate media backend")
@@ -117,7 +121,10 @@ func (b *mpvBackend) property(name, value string) error {
 	return b.set("mpv_set_property_string", name, value)
 }
 func (b *mpvBackend) command(a, arg, c string, extra ...string) error {
-	values := []string{a, arg}
+	values := []string{a}
+	if arg != "" || c != "" || len(extra) > 0 {
+		values = append(values, arg)
+	}
 	if c != "" || len(extra) > 0 {
 		values = append(values, c)
 	}
@@ -170,6 +177,18 @@ func (b *mpvBackend) recordControlError(err error) {
 		b.controlErr = err
 	}
 }
+func (b *mpvBackend) cleanupInlineDir() {
+	if b.inlineDir != "" {
+		_ = os.RemoveAll(b.inlineDir)
+		b.inlineDir = ""
+	}
+}
+func (b *mpvBackend) notifyRender() {
+	select {
+	case b.wakeRender <- struct{}{}:
+	default:
+	}
+}
 func (b *mpvBackend) Load(s Source) error {
 	s = cloneSource(s)
 	path, err := validateLocalFile(s.URL, b.cfg.limits)
@@ -177,20 +196,64 @@ func (b *mpvBackend) Load(s Source) error {
 		return err
 	}
 	s.URL = path
-	files := map[string]nativeCueFile{}
-	for i := range s.Captions {
-		path, err := validateLocalFile(s.Captions[i].Source, b.cfg.limits)
+	normLimits := b.cfg.limits.normalized()
+	inlineExts := make([]string, len(s.Captions))
+	hasInline := false
+	for i, cap := range s.Captions {
+		if cap.Data != nil {
+			ext, err := stageInlineCaptionExt(cap, normLimits.MaxFileBytes)
+			if err != nil {
+				return err
+			}
+			inlineExts[i] = ext
+			hasInline = true
+			continue
+		}
+		cpath, err := validateLocalFile(cap.Source, b.cfg.limits)
 		if err != nil {
 			return err
 		}
-		s.Captions[i].Source = path
+		s.Captions[i].Source = cpath
+	}
+	b.cleanupInlineDir()
+	if hasInline {
+		rawDir, err := os.MkdirTemp("", "ntvideo-inline-")
+		if err != nil {
+			return err
+		}
+		dir, err := filepath.EvalSymlinks(rawDir)
+		if err != nil {
+			_ = os.RemoveAll(rawDir)
+			return err
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			_ = os.RemoveAll(dir)
+			return err
+		}
+		b.inlineDir = dir
+		for i, cap := range s.Captions {
+			if cap.Data == nil {
+				continue
+			}
+			staged := filepath.Join(dir, fmt.Sprintf("sub-%d%s", i, inlineExts[i]))
+			if err := writeWorkerBytes(staged, cap.Data, normLimits.MaxFileBytes); err != nil {
+				b.cleanupInlineDir()
+				return err
+			}
+			s.Captions[i].Source = staged
+			s.Captions[i].Data = nil
+		}
+	}
+	files := map[string]nativeCueFile{}
+	for i := range s.Captions {
+		cpath := s.Captions[i].Source
 		if b.cfg.captionEvents {
 			// Bound aggregate parser memory as well as each sidecar.
 			if len(files) >= 16 {
-				files[path] = nativeCueFile{err: errors.New("ntvideo: cue events support at most 16 sidecars")}
+				files[cpath] = nativeCueFile{err: errors.New("ntvideo: cue events support at most 16 sidecars")}
 				continue
 			}
-			files[path] = readCueFile(path)
+			files[cpath] = readCueFile(cpath)
 		}
 	}
 	b.cueFiles = files
@@ -215,6 +278,19 @@ func (b *mpvBackend) Load(s Source) error {
 }
 func (b *mpvBackend) Play() error  { return b.property("pause", "no") }
 func (b *mpvBackend) Pause() error { return b.property("pause", "yes") }
+func (b *mpvBackend) step() error {
+	if b.loading || !b.loaded {
+		return nil
+	}
+	if err := b.property("pause", "yes"); err != nil {
+		return err
+	}
+	if err := b.command("frame-step", "", ""); err != nil {
+		return err
+	}
+	b.clearFrame()
+	return nil
+}
 func (b *mpvBackend) Seek(t time.Duration) error {
 	if b.loading {
 		b.deferredSeek = &t
@@ -263,12 +339,13 @@ func (b *mpvBackend) setCaptionOverlay(enabled bool) error {
 }
 func (b *mpvBackend) Layout(_ CellRect, visible bool) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.redraw = true
 	if !visible {
 		b.width, b.height = 1, 1
 		b.latest = nil
 	}
+	b.mu.Unlock()
+	b.notifyRender()
 	return nil
 }
 func (*mpvBackend) SetFit(FitMode) error { return nil } // picture owns native fitting.
@@ -352,6 +429,11 @@ func (b *mpvBackend) Poll() (Status, error) {
 		s.State = Loading
 	}
 	if b.loaded {
+		s.Width = max(0, int(b.number("width")))
+		s.Height = max(0, int(b.number("height")))
+		if fps := b.number("container-fps"); fps > 0 && !math.IsNaN(fps) && !math.IsInf(fps, 0) {
+			s.FPS = fps
+		}
 		s.State = Playing
 		if b.flag("pause") {
 			s.State = Paused
@@ -413,6 +495,7 @@ func (b *mpvBackend) clearFrame() {
 	b.latest = nil
 	b.redraw = true
 	b.mu.Unlock()
+	b.notifyRender()
 }
 func (b *mpvBackend) Frame(w, h int) (image.Image, error) {
 	if !b.loaded || b.seekPending {
@@ -426,14 +509,18 @@ func (b *mpvBackend) Frame(w, h int) (image.Image, error) {
 		}
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.width != w || b.height != h {
+	resized := b.width != w || b.height != h
+	if resized {
 		b.latest = nil
 	}
 	b.width = w
 	b.height = h
 	img := b.latest
 	b.latest = nil
+	b.mu.Unlock()
+	if resized {
+		b.notifyRender()
+	}
 	return img, nil
 }
 func (b *mpvBackend) renderLoop(ready chan<- error) {
@@ -461,58 +548,59 @@ func (b *mpvBackend) renderLoop(ready chan<- error) {
 		select {
 		case <-b.stop:
 			return
+		case <-b.wakeRender:
 		case <-ticker.C:
-			b.mu.Lock()
-			w, h, redraw := b.width, b.height, b.redraw
-			b.redraw = false
-			b.mu.Unlock()
-			var flags uint64
-			if err := b.lib.fn("mpv_render_context_update").call(unsafe.Pointer(&flags), unsafe.Pointer(&renderer)); err != nil {
-				b.recordRenderError(err)
-				return
-			}
-			if flags&1 == 0 && !redraw && w == oldW && h == oldH {
-				continue
-			}
-			oldW, oldH = w, h
-			data := make([]byte, w*h*4)
-			size := [2]int32{int32(w), int32(h)}
-			stride := uintptr(w * 4)
-			format := cstring("rgb0")
-			block := int32(0)
-			params := []mpvRenderParam{
-				{Kind: mpvRenderParamSWSize, Data: unsafe.Pointer(&size[0])},
-				{Kind: mpvRenderParamSWFormat, Data: unsafe.Pointer(format)},
-				{Kind: mpvRenderParamSWStride, Data: unsafe.Pointer(&stride)},
-				{Kind: mpvRenderParamSWPointer, Data: unsafe.Pointer(&data[0])},
-				{Kind: mpvRenderParamBlockForTargetTime, Data: unsafe.Pointer(&block)}, {},
-			}
-			pp := unsafe.Pointer(&params[0])
-			code, callErr := b.lib.fn("mpv_render_context_render").integer(unsafe.Pointer(&renderer), unsafe.Pointer(&pp))
-			runtime.KeepAlive(params)
-			runtime.KeepAlive(data)
-			runtime.KeepAlive(format)
-			if err := b.lib.err(code, callErr); err != nil {
-				b.recordRenderError(err)
-				if callErr != nil {
-					return
-				}
-				continue
-			}
-			if err := b.lib.fn("mpv_render_context_report_swap").call(nil, unsafe.Pointer(&renderer)); err != nil {
-				b.recordRenderError(err)
-				return
-			}
-			for i := 3; i < len(data); i += 4 {
-				data[i] = 255
-			}
-			img := &image.NRGBA{Pix: data, Stride: w * 4, Rect: image.Rect(0, 0, w, h)}
-			b.mu.Lock()
-			if b.width == w && b.height == h {
-				b.latest = img
-			}
-			b.mu.Unlock()
 		}
+		b.mu.Lock()
+		w, h, redraw := b.width, b.height, b.redraw
+		b.redraw = false
+		b.mu.Unlock()
+		var flags uint64
+		if err := b.lib.fn("mpv_render_context_update").call(unsafe.Pointer(&flags), unsafe.Pointer(&renderer)); err != nil {
+			b.recordRenderError(err)
+			return
+		}
+		if flags&1 == 0 && !redraw && w == oldW && h == oldH {
+			continue
+		}
+		oldW, oldH = w, h
+		data := make([]byte, w*h*4)
+		size := [2]int32{int32(w), int32(h)}
+		stride := uintptr(w * 4)
+		format := cstring("rgb0")
+		block := int32(0)
+		params := []mpvRenderParam{
+			{Kind: mpvRenderParamSWSize, Data: unsafe.Pointer(&size[0])},
+			{Kind: mpvRenderParamSWFormat, Data: unsafe.Pointer(format)},
+			{Kind: mpvRenderParamSWStride, Data: unsafe.Pointer(&stride)},
+			{Kind: mpvRenderParamSWPointer, Data: unsafe.Pointer(&data[0])},
+			{Kind: mpvRenderParamBlockForTargetTime, Data: unsafe.Pointer(&block)}, {},
+		}
+		pp := unsafe.Pointer(&params[0])
+		code, callErr := b.lib.fn("mpv_render_context_render").integer(unsafe.Pointer(&renderer), unsafe.Pointer(&pp))
+		runtime.KeepAlive(params)
+		runtime.KeepAlive(data)
+		runtime.KeepAlive(format)
+		if err := b.lib.err(code, callErr); err != nil {
+			b.recordRenderError(err)
+			if callErr != nil {
+				return
+			}
+			continue
+		}
+		if err := b.lib.fn("mpv_render_context_report_swap").call(nil, unsafe.Pointer(&renderer)); err != nil {
+			b.recordRenderError(err)
+			return
+		}
+		for i := 3; i < len(data); i += 4 {
+			data[i] = 255
+		}
+		img := &image.RGBA{Pix: data, Stride: w * 4, Rect: image.Rect(0, 0, w, h)}
+		b.mu.Lock()
+		if b.width == w && b.height == h {
+			b.latest = img
+		}
+		b.mu.Unlock()
 	}
 }
 
@@ -530,5 +618,6 @@ func (b *mpvBackend) recordRenderError(err error) {
 func (b *mpvBackend) Close() error {
 	close(b.stop)
 	<-b.done
+	b.cleanupInlineDir()
 	return errors.Join(b.destroy(), b.renderErr, b.controlErr)
 }

@@ -183,7 +183,7 @@ tasks:
     env:
       NTVIDEO_TEST_FILE: '{{.SOURCE}}'
     cmds:
-      - go test -mod=readonly -race -count=1 -v . -run 'TestMPV|TestPausedInitialFrame|TestKittyPresentation|TestHeadlessMedia'
+      - go test -mod=readonly -race -count=1 -v . -run 'TestMPV|TestPausedInitialFrame|TestKittyPresentation|TestHeadlessMedia|TestPlayer'
 
 ###############################################################################
 # Native player

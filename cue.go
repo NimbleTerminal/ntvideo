@@ -1,6 +1,8 @@
 package ntvideo
 
 import (
+	"io"
+	"slices"
 	"sort"
 	"time"
 
@@ -197,4 +199,169 @@ func (m *Model) resetCues(reason CueReason) {
 	m.queueCueEvents(m.cues.clear(reason))
 	m.cueVersion++
 	m.cueReason = reason
+}
+
+// CueTimeline is an immutable indexed subtitle cue list for headless and
+// custom playback hosts. A nil *CueTimeline behaves as an empty timeline.
+type CueTimeline struct {
+	inner *cueTimeline
+}
+
+// NewCueTimeline indexes cues for random-access ActiveAt lookups and stateful
+// CueCursor traversal. The input slice is copied, bounded to 10,000 valid cues
+// and 4 MiB total text, and sanitized with the same terminal-safe plain-text
+// rules as ParseCues.
+func NewCueTimeline(cues []CaptionCue) *CueTimeline {
+	sanitized := make([]CaptionCue, 0, min(len(cues), maxCaptionCues))
+	total := 0
+	for _, c := range cues {
+		if len(sanitized) >= maxCaptionCues {
+			break
+		}
+		if c.Start < 0 || c.End <= c.Start {
+			continue
+		}
+		c.Text = captionPlainText(c.Text)
+		if total+len(c.Text) > maxCueBytes {
+			break
+		}
+		total += len(c.Text)
+		sanitized = append(sanitized, c)
+	}
+	return &CueTimeline{inner: newCueTimeline(sanitized)}
+}
+
+// ParseCueTimeline parses bounded UTF-8 SRT or WebVTT cues from r (accepting
+// CueSRT, CueWebVTT, or CueAuto) and indexes them into a CueTimeline.
+func ParseCueTimeline(r io.Reader, format CueFormat) (*CueTimeline, error) {
+	cues, err := ParseCues(r, format)
+	if err != nil {
+		return nil, err
+	}
+	return NewCueTimeline(cues), nil
+}
+
+// Len reports the number of cues in the timeline.
+func (t *CueTimeline) Len() int {
+	if t == nil || t.inner == nil {
+		return 0
+	}
+	return len(t.inner.cues)
+}
+
+// Cues returns a copy of all cues in file order.
+func (t *CueTimeline) Cues() []CaptionCue {
+	if t == nil || t.inner == nil {
+		return nil
+	}
+	return slices.Clone(t.inner.cues)
+}
+
+// ActiveAt returns cues active at pos (Start <= pos < End) in file order.
+func (t *CueTimeline) ActiveAt(pos time.Duration) []CaptionCue {
+	if t == nil || t.inner == nil || pos < 0 {
+		return nil
+	}
+	var out []CaptionCue
+	for _, c := range t.inner.cues {
+		if c.Start <= pos && pos < c.End {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// CueCursor tracks active cues and boundary crossings across sampled playback
+// positions using the same ordering, seek, track-change, and loop semantics as
+// Model. CueCursor is not safe for concurrent use without synchronization.
+type CueCursor struct {
+	sched      cueScheduler
+	timeline   *cueTimeline
+	track      string
+	seekSerial uint64
+	reason     CueReason
+}
+
+// NewCueCursor creates a stateful cursor bound to timeline and trackID.
+func NewCueCursor(timeline *CueTimeline, trackID string) *CueCursor {
+	var inner *cueTimeline
+	if timeline != nil {
+		inner = timeline.inner
+	}
+	return &CueCursor{
+		timeline: inner,
+		track:    trackID,
+	}
+}
+
+// SetTimeline switches the cursor's timeline or trackID. Any active cues from
+// the previous timeline exit with CueTrackChange on the next Observe or Seek.
+func (c *CueCursor) SetTimeline(timeline *CueTimeline, trackID string) {
+	var inner *cueTimeline
+	if timeline != nil {
+		inner = timeline.inner
+	}
+	if c.sched.started && (c.timeline != inner || c.track != trackID) {
+		c.reason = CueTrackChange
+	}
+	c.timeline = inner
+	c.track = trackID
+}
+
+// Observe advances or reconciles the cursor at sampled media position pos and
+// stream duration, emitting CueEnter and CueExit events in boundary order.
+// When loop is true and pos wraps backward without an explicit Seek, remaining
+// cues finish with CuePlayback before replaying from zero to pos.
+func (c *CueCursor) Observe(pos, duration time.Duration, loop bool) []CaptionCueMsg {
+	pos = max(0, pos)
+	duration = max(0, duration)
+	reason := c.reason
+	c.reason = ""
+	snap := &cueSnapshot{
+		track:      c.track,
+		timeline:   c.timeline,
+		seekSerial: c.seekSerial,
+	}
+	return c.sched.observe(snap, pos, duration, reason, loop)
+}
+
+// Seek reconciles the cursor at an explicit seek destination, exiting prior
+// active cues and entering destination cues with CueSeek without emitting
+// intermediate cues.
+func (c *CueCursor) Seek(pos, duration time.Duration) []CaptionCueMsg {
+	pos = max(0, pos)
+	duration = max(0, duration)
+	c.seekSerial++
+	c.reason = ""
+	snap := &cueSnapshot{
+		track:      c.track,
+		timeline:   c.timeline,
+		seekSerial: c.seekSerial,
+	}
+	return c.sched.observe(snap, pos, duration, CueSeek, false)
+}
+
+// Active returns the currently active cues in file order with TrackID populated.
+func (c *CueCursor) Active() []CaptionCue {
+	if c.sched.timeline == nil || len(c.sched.active) == 0 {
+		return nil
+	}
+	var out []CaptionCue
+	for i, cue := range c.sched.timeline.cues {
+		if c.sched.active[i] {
+			cue.TrackID = c.sched.track
+			out = append(out, cue)
+		}
+	}
+	return out
+}
+
+// Reset exits any currently active cues with reason (defaulting to CueClose)
+// and clears cursor state.
+func (c *CueCursor) Reset(reason CueReason) []CaptionCueMsg {
+	if reason == "" {
+		reason = CueClose
+	}
+	c.reason = ""
+	return c.sched.clear(reason)
 }

@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## Unreleased (2026-11-13)
+
+ * **Subtitle timeline, cursor, auto-detection, and confined parsing:**
+   * Export `CueTimeline` (`NewCueTimeline`, `ParseCueTimeline`, `Len`, `Cues`, `ActiveAt`) and `CueCursor` (`NewCueCursor`, `Observe`, `Seek`, `SetTimeline`, `Active`, `Reset`) so headless and node-graph hosts share `Model`'s exact cue boundary, overlap, seek, track-change, and loop-wrap semantics, with terminal-safe plain-text sanitization and bounded cue/byte caps enforced by construction.
+   * Add `CueAuto` and zero-copy `DetectCueFormat` to `ParseCues`, plus `ParseCuesConfined` and `ParseCueTimelineConfined` to parse untrusted SRT/WebVTT streams out-of-process in a short-lived OS-confined `ntmediabox` `ServeWorker` helper without loading `libmpv` or parsing subtitle contents in the host.
+   * Add `Caption.Data` and `Caption.Format` for bounded (`<= 4 MiB`) inline SRT/WebVTT sidecars without caller-managed temporary files. Native staging checks only transport bounds in the host; `WithWorker` / `PlayerOptions.Worker` parses staged sidecars exclusively inside the confined helper and surfaces parse failures on `Status.CaptionCueErr` without stopping video playback.
+ * **Host-owned terminal overlays and readiness:**
+   * Add `CaptionRenderMode` (`CaptionRenderBackend`, `CaptionRenderPlain`, `CaptionRenderHost`), `WithCaptionRenderMode`, `Model.SetCaptionRenderMode`, and `Model.Ready()` so hosts rendering custom caption animations can suppress `libmpv` burned-in subtitles without drawing `ntvideo`'s plain box or snooping `ntpicture.PresentedMsg`.
+   * Export Kitty-placeholder-safe terminal compositors `OverlayCell`, `OverlayCells`, and `SpliceRows` backed by single-pass per-row `ultraviolet` cell parsing, stripping ANSI escapes, control runes, and bidirectional overrides while preserving adjacent Kitty `\U0010eeee` placeholders and avoiding SGR growth.
+ * **Headless `Player` parity and native backend improvements:**
+   * Expand `PlayerOptions` with `Worker` (`*WorkerConfig` for confined `ntmediabox` decoding), `Loop`, `CaptionEvents`, and `SuppressSubtitles`, and add `Player.LoadSource`, `SelectTrack`, `SetSuppressSubtitles`, `CueTimeline`, and single-frame `Step` (`frame-step` on in-process `libmpv`).
+   * Return `*image.RGBA` directly from `libmpv` software rendering, wake the render loop immediately on load/seek/resize/step, populate `Status.Width`, `Status.Height`, and `Status.FPS` when reported by the backend, and fix `TestPlayerRealPlayback` (`task test-media` now runs `TestPlayer*`).
+ * **Dependencies:**
+   * Update `ntpicture` to v0.2.0, `ntmediabox` / `ntconfine` to v0.2.0, and the browser example's `booba` dependency to v0.13.0. Existing public API signatures are unchanged.
+
 ## v0.5.1 (2026-11-05)
 
  * Fix confined playback on macOS when LibreSSL needs its system OpenSSL configuration; grant read access to that file only.

@@ -99,3 +99,84 @@ func TestCaptionPlainTextRemovesBidiControls(t *testing.T) {
 		t.Fatalf("altered ordinary Unicode text: %q", got)
 	}
 }
+
+func TestOverlayCellsPreservesKittyAndAvoidsSGRGrowth(t *testing.T) {
+	for _, mode := range []RenderMode{RenderGlyph, RenderRaster} {
+		t.Run(mode.String(), func(t *testing.T) {
+			session := ntpicture.NewTerminalSession(ntpicture.TerminalOptions{Kitty: ntpicture.KittyCapabilitySupported})
+			defer session.Close()
+			m := New(
+				WithTerminalSession(session),
+				WithRenderMode(mode),
+				WithCaptionRenderMode(CaptionRenderHost),
+				WithWidth(30),
+				WithHeight(4),
+			)
+			defer m.Close()
+			drivePicture(t, m, m.pic.SetImage(solidFrame(color.White)))
+			m.status.CaptionText = "Host owns caption overlay"
+			base := m.View()
+			if strings.Contains(base, "Host owns caption overlay") {
+				t.Fatal("CaptionRenderHost unexpectedly rendered built-in plain caption box")
+			}
+
+			cells := []OverlayCell{
+				{X: 2, Y: 3, Symbol: "\x1b[2J♪ 世界\u202e!", Fg: color.RGBA{R: 255, G: 215, B: 0, A: 255}, Bg: color.Black, Bold: true},
+				{X: -4, Y: 3, Symbol: "clip"},
+				{X: 99, Y: 3, Symbol: "clip"},
+			}
+			first := OverlayCells(base, 30, 4, cells)
+			if strings.Contains(first, "\x1b[2J") || strings.ContainsRune(first, '\u202e') {
+				t.Fatal("OverlayCells leaked escape or bidi control")
+			}
+			rows := strings.Split(first, "\n")
+			if len(rows) != 4 || rows[0] != strings.Split(base, "\n")[0] {
+				t.Fatal("untouched rows changed")
+			}
+			for _, row := range rows {
+				if ansi.StringWidth(row) != 30 {
+					t.Fatalf("row width = %d, want 30", ansi.StringWidth(row))
+				}
+			}
+			if !strings.Contains(rows[3], "♪ 世界!") {
+				t.Fatalf("missing overlaid text in %q", rows[3])
+			}
+			if mode == RenderRaster && !strings.Contains(rows[3], "\U0010eeee") {
+				t.Fatal("uncovered Kitty placeholder cells were lost")
+			}
+
+			repeated := first
+			for range 25 {
+				repeated = OverlayCells(repeated, 30, 4, cells)
+			}
+			if len(repeated) > len(first)+64 {
+				t.Fatalf("repeated OverlayCells grew output from %d to %d bytes", len(first), len(repeated))
+			}
+		})
+	}
+}
+
+func TestSpliceRowsAndModelReady(t *testing.T) {
+	spliced := SpliceRows("TOP1\nTOP2\nTOP3", "bot1\nbot2\nbot3", 6, 3, 2)
+	if spliced != "TOP1  \nTOP2  \nbot3  " {
+		t.Fatalf("SpliceRows = %q", spliced)
+	}
+
+	m := New(WithSource("clip.mp4"), WithPoster(solidFrame(color.Black)), WithWidth(8), WithHeight(4))
+	defer m.Close()
+	b := &fakeBackend{status: Status{State: Paused}}
+	m.engine.b = b
+	drivePicture(t, m, m.Init())
+	if m.Ready() {
+		t.Fatal("poster frame must not mark Ready()")
+	}
+	b.img = solidFrame(color.White)
+	drivePicture(t, m, m.Update(m.sample()()))
+	if !m.Ready() {
+		t.Fatal("expected Ready() after first media frame")
+	}
+	m.Load(Source{URL: "next.mp4"})
+	if m.Ready() {
+		t.Fatal("Load must reset Ready()")
+	}
+}

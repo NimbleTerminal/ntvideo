@@ -7,30 +7,98 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// CaptionRenderMode controls how native playback presents subtitles.
+// Browsers always use HTML <track> presentation.
+type CaptionRenderMode string
+
+const (
+	// CaptionRenderBackend lets libmpv rasterize subtitles into video frames (default).
+	CaptionRenderBackend CaptionRenderMode = "backend"
+	// CaptionRenderPlain suppresses libmpv subtitle rasterization and draws
+	// ntvideo's built-in plain terminal caption box over View().
+	CaptionRenderPlain CaptionRenderMode = "plain"
+	// CaptionRenderHost suppresses libmpv subtitle rasterization and leaves
+	// View() without a built-in caption box so the host can composite its own
+	// terminal overlay (for example with OverlayCells).
+	CaptionRenderHost CaptionRenderMode = "host"
+)
+
+func normalizeCaptionRenderMode(mode CaptionRenderMode) CaptionRenderMode {
+	switch mode {
+	case CaptionRenderPlain, CaptionRenderHost:
+		return mode
+	default:
+		return CaptionRenderBackend
+	}
+}
+
+// WithCaptionRenderMode selects native subtitle presentation. It has no effect
+// in browsers. Bitmap subtitles have no text equivalent; keep CaptionRenderBackend
+// for those tracks.
+func WithCaptionRenderMode(mode CaptionRenderMode) Option {
+	mode = normalizeCaptionRenderMode(mode)
+	return func(c *config) {
+		c.nativeCaptionOverlay = mode != CaptionRenderBackend
+		c.hostCaptionOverlay = mode == CaptionRenderHost
+	}
+}
+
 // WithNativeCaptionOverlay draws plain terminal captions over native video,
 // instead of asking libmpv to rasterize them. It has no effect in browsers.
 // Bitmap subtitles have no text equivalent; leave this disabled for those tracks.
 func WithNativeCaptionOverlay(enabled bool) Option {
-	return func(c *config) { c.nativeCaptionOverlay = enabled }
+	if enabled {
+		return WithCaptionRenderMode(CaptionRenderPlain)
+	}
+	return WithCaptionRenderMode(CaptionRenderBackend)
 }
 
-func (m *Model) NativeCaptionOverlay() bool { return !m.dom && m.cfg.nativeCaptionOverlay }
+// CaptionRenderMode reports the configured native subtitle presentation mode.
+func (m *Model) CaptionRenderMode() CaptionRenderMode {
+	if m.cfg.nativeCaptionOverlay {
+		if m.cfg.hostCaptionOverlay {
+			return CaptionRenderHost
+		}
+		return CaptionRenderPlain
+	}
+	return CaptionRenderBackend
+}
+
+func (m *Model) NativeCaptionOverlay() bool {
+	return !m.dom && m.CaptionRenderMode() == CaptionRenderPlain
+}
+
+// SetCaptionRenderMode switches native subtitle presentation without changing
+// the selected track or playback position. Like Play, it queues work for Init/Update.
+func (m *Model) SetCaptionRenderMode(mode CaptionRenderMode) {
+	mode = normalizeCaptionRenderMode(mode)
+	if m.closed || m.dom || m.CaptionRenderMode() == mode {
+		return
+	}
+	prevSuppress := m.cfg.nativeCaptionOverlay
+	m.cfg.nativeCaptionOverlay = mode != CaptionRenderBackend
+	m.cfg.hostCaptionOverlay = mode == CaptionRenderHost
+	m.epoch++
+	m.pictureCommands = append(m.pictureCommands, m.pic.Stop())
+	if prevSuppress != m.cfg.nativeCaptionOverlay {
+		suppress := m.cfg.nativeCaptionOverlay
+		m.engine.enqueue(func(b backend) error {
+			if native, ok := b.(interface{ setCaptionOverlay(bool) error }); ok {
+				return native.setCaptionOverlay(suppress)
+			}
+			return nil
+		})
+	}
+}
 
 // SetNativeCaptionOverlay switches presentation without changing the selected
 // track or playback position. Like Play, it queues work for Init/Update.
 func (m *Model) SetNativeCaptionOverlay(enabled bool) {
-	if m.closed || m.dom || m.cfg.nativeCaptionOverlay == enabled {
+	if enabled {
+		m.SetCaptionRenderMode(CaptionRenderPlain)
 		return
 	}
-	m.cfg.nativeCaptionOverlay = enabled
-	m.epoch++
-	m.pictureCommands = append(m.pictureCommands, m.pic.Stop())
-	m.engine.enqueue(func(b backend) error {
-		if native, ok := b.(interface{ setCaptionOverlay(bool) error }); ok {
-			return native.setCaptionOverlay(enabled)
-		}
-		return nil
-	})
+	m.SetCaptionRenderMode(CaptionRenderBackend)
 }
 
 // Only sanitized, bounded text may be mixed into a terminal image grid.

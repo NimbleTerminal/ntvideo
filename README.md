@@ -9,7 +9,7 @@ half-block rendering. Audio belongs to the browser or the OS media backend.
 
 This is an experimental MVP, with a portable public API offering native and browser playback.
 
-For v0.5.0 changes, see the [changelog](CHANGELOG.md) and
+For v0.5.1 and unreleased changes, see the [changelog](CHANGELOG.md) and
 [migration guide](MIGRATING.md). Hosts upgrading from v0.1.0 must also account
 for the v0.2.0 `Model.Close` API change.
 
@@ -200,11 +200,17 @@ perform OCR or speech recognition. Other unsupported codecs return FFmpeg errors
 These headless transcripts do not automatically enable embedded native playback
 cue events. `TrackID` is the chosen subtitle ordinal, independently of libmpv IDs.
 
-For an existing reader, use the exported parser:
+For an existing reader, use the exported parser or indexed timeline:
 
 ```go
-cues, err := ntvideo.ParseCues(reader, ntvideo.CueSRT)
-// Or ntvideo.CueWebVTT for a WebVTT reader, including its WEBVTT header.
+cues, err := ntvideo.ParseCues(reader, ntvideo.CueAuto)
+// Or ntvideo.CueSRT / ntvideo.CueWebVTT to enforce a specific format.
+timeline, err := ntvideo.ParseCueTimeline(reader, ntvideo.CueAuto)
+// Or ntvideo.ParseCueTimelineConfined(ctx, reader, ntvideo.CueAuto, workerCfg)
+// to parse untrusted SRT/WebVTT inside an OS-confined ServeWorker helper.
+active := timeline.ActiveAt(1500 * time.Millisecond)
+cursor := ntvideo.NewCueCursor(timeline, "0")
+events := cursor.Observe(pos, duration, loop)
 ```
 
 The parser and transcript extraction accept at most 4 MiB and 10,000 cues, with
@@ -256,9 +262,13 @@ frame, err := p.Frame(640, 360) // nil until there is a new frame
 ```
 
 Files load paused. Poll `Frame` at your own rate: it returns the newest opaque
-frame scaled to fit and it advances playback state itself, so an error it returns
-is not reported again by `Status`. A host that confines the process must leave libmpv and
-its dependencies readable, because they load at the first `Load`.
+`*image.RGBA` frame scaled to fit and advances playback state itself, so an error
+it returns is not reported again by `Status`. `PlayerOptions` also supports
+`Worker` (confined `ntmediabox` out-of-process decoding), `Loop`, `CaptionEvents`,
+and `SuppressSubtitles`; `Player` exposes `LoadSource`, `SelectTrack`,
+`SetSuppressSubtitles`, `CueTimeline`, and single-frame `Step` (`frame-step` on
+in-process native playback). A host that confines an in-process `Player` itself
+must leave libmpv and its dependencies readable, because they load at the first `Load`.
 
 ## Task runner
 
@@ -478,7 +488,13 @@ The text overlay uses up to three centered, wrapped lines with a black backgroun
 above the scrubber. It works with glyph video and Kitty placeholders. Text comes
 from libmpv's active cue, so playback, pause, and seek retain subtitle timing.
 `WithNativeCaptionOverlay(true)` and `SetNativeCaptionOverlay(bool)` expose this
-option to hosts; the setter queues work like `Play`. Browsers retain their HTML
+option to hosts; the setter queues work like `Play`. Hosts that render their own
+animated terminal captions can use `WithCaptionRenderMode(ntvideo.CaptionRenderHost)`
+(suppressing libmpv burned-in subtitles without drawing the built-in plain box),
+check `Model.Ready()` for first-frame readiness, and composite styled cells with
+`OverlayCells` and `SpliceRows` without disturbing adjacent Kitty placeholders.
+`Caption.Data` (with optional `Caption.Format`) accepts bounded inline UTF-8
+SRT/WebVTT bytes when `Caption.Source` is empty. Browsers retain their HTML
 caption rendering. Bitmap subtitle tracks have no text equivalent; use backend
 rendering for those. ASS styling and positioning are omitted in terminal text mode.
 

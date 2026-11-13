@@ -94,12 +94,12 @@ func TestDOMCaptionCueTimeline(t *testing.T) {
 
 func TestDOMCaptionTracks(t *testing.T) {
 	setupDOM(t)
-	m := New(WithNativeControls(false), WithMedia(Source{URL: "movie.mp4", Captions: []Caption{{Source: "en.vtt", Label: "English", Language: "en", Default: true}, {Source: "es.vtt", Label: "Spanish", Language: "es"}}}))
+	m := New(WithNativeControls(false), WithMedia(Source{URL: "movie.mp4", Captions: []Caption{{Source: "en.vtt", Label: "English", Language: "en", Default: true}, {Data: []byte("WEBVTT\n\n00:00.000 --> 00:01.000\nHola\n"), Label: "Spanish", Language: "es"}}}))
 	defer m.Close()
 	sampleDOM(m)
 	v := domVideo(t, m)
 	children := v.Get("children")
-	if children.Length() != 2 || children.Index(0).Get("src").String() != "en.vtt" || !children.Index(0).Get("default").Bool() || children.Index(1).Get("srclang").String() != "es" {
+	if children.Length() != 2 || children.Index(0).Get("src").String() != "en.vtt" || !children.Index(0).Get("default").Bool() || children.Index(1).Get("srclang").String() != "es" || !strings.HasPrefix(children.Index(1).Get("src").String(), "data:text/vtt;base64,") {
 		t.Fatal("caption elements missing metadata")
 	}
 	// The fixture supplies the browser's resulting TextTrackList.

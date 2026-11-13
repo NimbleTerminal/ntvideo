@@ -3,6 +3,7 @@
 package ntvideo
 
 import (
+	"bytes"
 	"errors"
 	"image"
 	"time"
@@ -34,11 +35,15 @@ type CellRect struct{ X, Y, Cols, Rows int }
 
 type Caption struct {
 	Source, Label, Language string
-	Default                 bool
+	// Data supplies inline UTF-8 SRT or WebVTT bytes (at most 4 MiB) when
+	// Source is empty. Setting both Source and Data returns an error on Load.
+	Data    []byte
+	Format  CueFormat
+	Default bool
 }
 type Source struct {
 	URL      string    // Browser URL (including blob: and relative URLs) or a native local filename.
-	Captions []Caption // WebVTT URLs in browsers; external subtitle files natively.
+	Captions []Caption // WebVTT URLs or inline WebVTT in browsers; external files or inline SRT/WebVTT natively.
 }
 type Track struct {
 	ID, Label, Language string
@@ -59,6 +64,8 @@ type Status struct {
 	CaptionText                string
 	State                      State
 	CurrentTime, Duration      time.Duration
+	Width, Height              int     // Decoded source dimensions when reported by the backend; zero otherwise.
+	FPS                        float64 // Container frame rate when reported by the backend; zero otherwise.
 	Volume                     float64 // 0..1
 	Muted                      bool
 	AudioTracks, CaptionTracks []Track
@@ -85,6 +92,7 @@ type config struct {
 	muted, loop, autoplay         bool
 	nativeControls                bool
 	nativeCaptionOverlay          bool
+	hostCaptionOverlay            bool
 	captionEvents                 bool
 	host, description, transcript string
 	z                             int
@@ -123,7 +131,18 @@ func WithZIndex(z int) Option           { return func(c *config) { c.z = z } }
 // transmission unless the terminal answers its shared-memory probe. Pass
 // ntpicture.KittyMediumDirect to always stream frames through the tty.
 func WithKittyMedium(m ntpicture.KittyMedium) Option { return func(c *config) { c.kittyMedium = m } }
-func cloneSource(s Source) Source                    { s.Captions = append([]Caption(nil), s.Captions...); return s }
+func cloneSource(s Source) Source {
+	if s.Captions == nil {
+		return s
+	}
+	caps := make([]Caption, len(s.Captions))
+	for i, c := range s.Captions {
+		c.Data = bytes.Clone(c.Data)
+		caps[i] = c
+	}
+	s.Captions = caps
+	return s
+}
 func volume(v float64) float64 {
 	if v != v {
 		return 1

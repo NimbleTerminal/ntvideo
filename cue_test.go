@@ -194,3 +194,92 @@ func TestCueEventsRequireOptInAndSource(t *testing.T) {
 		m.Close()
 	}
 }
+
+func TestCueAutoAndCueTimeline(t *testing.T) {
+	srt := "\ufeff1\r\n00:00:00,500 --> 00:00:01,500\r\nFirst line\r\n\r\n2\r\n00:00:01,000 --> 00:00:02,000\r\nOverlap\r\n"
+	vtt := "WEBVTT - test\n\n00:00.500 --> 00:01.500\nFirst line\n\n00:01.000 --> 00:02.000\nOverlap\n"
+	if DetectCueFormat([]byte(srt)) != CueSRT || DetectCueFormat([]byte(vtt)) != CueWebVTT {
+		t.Fatal("DetectCueFormat mismatch")
+	}
+	for _, raw := range []string{srt, vtt} {
+		tl, err := ParseCueTimeline(strings.NewReader(raw), CueAuto)
+		if err != nil {
+			t.Fatalf("ParseCueTimeline(CueAuto): %v", err)
+		}
+		if tl.Len() != 2 {
+			t.Fatalf("Len() = %d, want 2", tl.Len())
+		}
+		copied := tl.Cues()
+		copied[0].Text = "mutated"
+		if tl.Cues()[0].Text != "First line" {
+			t.Fatal("CueTimeline.Cues leaked backing slice")
+		}
+		if got := tl.ActiveAt(499 * time.Millisecond); len(got) != 0 {
+			t.Fatalf("ActiveAt before start: %v", got)
+		}
+		if got := tl.ActiveAt(500 * time.Millisecond); len(got) != 1 || got[0].ID != "0" {
+			t.Fatalf("ActiveAt exact start: %v", got)
+		}
+		if got := tl.ActiveAt(1200 * time.Millisecond); len(got) != 2 {
+			t.Fatalf("ActiveAt overlap: %v", got)
+		}
+		if got := tl.ActiveAt(2 * time.Second); len(got) != 0 {
+			t.Fatalf("ActiveAt exact end: %v", got)
+		}
+	}
+	var nilTimeline *CueTimeline
+	if nilTimeline.Len() != 0 || nilTimeline.Cues() != nil || nilTimeline.ActiveAt(time.Second) != nil {
+		t.Fatal("nil CueTimeline should behave as empty")
+	}
+	dirty := NewCueTimeline([]CaptionCue{
+		{ID: "0", Start: 0, End: time.Second, Text: "\x1b[31mhi\u202e\x00"},
+		{ID: "1", Start: 2 * time.Second, End: time.Second, Text: "inverted"},
+	})
+	if dirty.Len() != 1 || dirty.Cues()[0].Text != "hi" {
+		t.Fatalf("NewCueTimeline did not sanitize/bound cues: %+v", dirty.Cues())
+	}
+}
+
+func TestCueCursorLifecycle(t *testing.T) {
+	tl := NewCueTimeline([]CaptionCue{
+		{ID: "0", Start: time.Second, End: 1100 * time.Millisecond, Text: "short-a"},
+		{ID: "1", Start: 1100 * time.Millisecond, End: 1200 * time.Millisecond, Text: "short-b"},
+		{ID: "2", Start: 1050 * time.Millisecond, End: 2 * time.Second, Text: "overlap"},
+	})
+	cursor := NewCueCursor(tl, "sub-0")
+	if got := cursor.Observe(0, 3*time.Second, true); len(got) != 0 {
+		t.Fatalf("initial Observe at 0: %v", got)
+	}
+	events := cursor.Observe(1500*time.Millisecond, 3*time.Second, true)
+	want := []string{"enter:0:playback", "enter:2:playback", "exit:0:playback", "enter:1:playback", "exit:1:playback"}
+	if !reflect.DeepEqual(eventNames(events), want) {
+		t.Fatalf("got %v, want %v", eventNames(events), want)
+	}
+	active := cursor.Active()
+	if len(active) != 1 || active[0].ID != "2" || active[0].TrackID != "sub-0" {
+		t.Fatalf("Active() = %+v", active)
+	}
+	// Loop wraparound finishes cue 2 and replays from zero.
+	events = cursor.Observe(1060*time.Millisecond, 3*time.Second, true)
+	wantLoop := []string{"exit:2:playback", "enter:0:playback", "enter:2:playback"}
+	if !reflect.DeepEqual(eventNames(events), wantLoop) {
+		t.Fatalf("loop got %v, want %v", eventNames(events), wantLoop)
+	}
+	// Explicit Seek exits active cues with CueSeek and enters destination cues.
+	events = cursor.Seek(1150*time.Millisecond, 3*time.Second)
+	wantSeek := []string{"exit:0:seek", "exit:2:seek", "enter:1:seek", "enter:2:seek"}
+	if !reflect.DeepEqual(eventNames(events), wantSeek) {
+		t.Fatalf("seek got %v, want %v", eventNames(events), wantSeek)
+	}
+	// Switching track emits CueTrackChange on next Observe.
+	cursor.SetTimeline(tl, "sub-1")
+	events = cursor.Observe(1150*time.Millisecond, 3*time.Second, false)
+	if len(events) != 4 || events[0].Reason != CueTrackChange || events[2].Cue.TrackID != "sub-1" {
+		t.Fatalf("track switch got %+v", events)
+	}
+	// Reset exits remaining cues with CueClose.
+	events = cursor.Reset(CueClose)
+	if len(events) != 2 || events[0].Kind != CueExit || events[0].Reason != CueClose {
+		t.Fatalf("Reset got %+v", events)
+	}
+}

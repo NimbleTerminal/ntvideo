@@ -242,6 +242,31 @@ func copyWorkerFile(src, dst string, maxBytes int64) error {
 	return nil
 }
 
+func writeWorkerBytes(dst string, data []byte, maxBytes int64) error {
+	if int64(len(data)) > maxBytes {
+		return errors.New("ntvideo: staged file exceeds size limit")
+	}
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	ok := false
+	defer func() {
+		_ = out.Close()
+		if !ok {
+			_ = os.Remove(dst)
+		}
+	}()
+	if _, err := out.Write(data); err != nil {
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	ok = true
+	return nil
+}
+
 func (b *workerBackend) Load(s Source) error {
 	s = cloneSource(s)
 	resolvedVideo, err := validateLocalFile(s.URL, b.cfg.limits)
@@ -254,9 +279,18 @@ func (b *workerBackend) Load(s Source) error {
 	subLimit := b.cfg.limits.normalized()
 	subLimit.MaxFileBytes = min(subLimit.MaxFileBytes, maxWorkerSidecarBytes)
 	resolvedCaps := make([]string, len(s.Captions))
+	inlineExts := make([]string, len(s.Captions))
 	sidecars := make([]nativeCueFile, len(s.Captions))
-	for i := range s.Captions {
-		cpath, err := validateLocalFile(s.Captions[i].Source, subLimit)
+	for i, cap := range s.Captions {
+		if cap.Data != nil {
+			ext, err := stageInlineCaptionExt(cap, subLimit.MaxFileBytes)
+			if err != nil {
+				return err
+			}
+			inlineExts[i] = ext
+			continue
+		}
+		cpath, err := validateLocalFile(cap.Source, subLimit)
 		if err != nil {
 			return err
 		}
@@ -293,17 +327,32 @@ func (b *workerBackend) Load(s Source) error {
 
 	reqCaps := make([]ntmediabox.Caption, len(s.Captions))
 	for i, cap := range s.Captions {
-		ext := sanitizeExt(filepath.Ext(resolvedCaps[i]))
-		subName := fmt.Sprintf("sub-%d%s", i, ext)
-		if err := copyWorkerFile(resolvedCaps[i], filepath.Join(mediaDir, subName), subLimit.MaxFileBytes); err != nil {
-			_ = os.RemoveAll(mediaDir)
-			return err
+		var ext string
+		var stageErr error
+		if cap.Data != nil {
+			ext = inlineExts[i]
+			subName := fmt.Sprintf("sub-%d%s", i, ext)
+			stageErr = writeWorkerBytes(filepath.Join(mediaDir, subName), cap.Data, subLimit.MaxFileBytes)
+			reqCaps[i] = ntmediabox.Caption{
+				Name:     subName,
+				Label:    cap.Label,
+				Language: cap.Language,
+				Default:  cap.Default,
+			}
+		} else {
+			ext = sanitizeExt(filepath.Ext(resolvedCaps[i]))
+			subName := fmt.Sprintf("sub-%d%s", i, ext)
+			stageErr = copyWorkerFile(resolvedCaps[i], filepath.Join(mediaDir, subName), subLimit.MaxFileBytes)
+			reqCaps[i] = ntmediabox.Caption{
+				Name:     subName,
+				Label:    cap.Label,
+				Language: cap.Language,
+				Default:  cap.Default,
+			}
 		}
-		reqCaps[i] = ntmediabox.Caption{
-			Name:     subName,
-			Label:    cap.Label,
-			Language: cap.Language,
-			Default:  cap.Default,
+		if stageErr != nil {
+			_ = os.RemoveAll(mediaDir)
+			return stageErr
 		}
 	}
 

@@ -1,6 +1,7 @@
 package ntvideo
 
 import (
+	"bytes"
 	"fmt"
 	"html"
 	"io"
@@ -20,15 +21,30 @@ type CueFormat string
 const (
 	CueSRT    CueFormat = "srt"
 	CueWebVTT CueFormat = "webvtt"
+	CueAuto   CueFormat = "auto"
 )
 
+// DetectCueFormat inspects at most the first 10 bytes of subtitle data and
+// returns CueWebVTT when a WebVTT header is present, or CueSRT otherwise.
+func DetectCueFormat(data []byte) CueFormat {
+	b := bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
+	if len(b) >= 6 && string(b[:6]) == "WEBVTT" {
+		if len(b) == 6 || b[6] == '\n' || b[6] == '\r' || b[6] == ' ' || b[6] == '\t' {
+			return CueWebVTT
+		}
+	}
+	return CueSRT
+}
+
 // ParseCues reads at most 4 MiB plus one overflow byte and returns at most 10,000
-// cues in file order. IDs are distinct stable ordinals within the file; TrackID
-// is empty. Text is plain, terminal-safe, and capped at 4096 runes per cue.
-// WebVTT timestamp maps are unsupported. Errors return no partial transcript.
-// The caller owns r; cancellation of a blocking reader is the caller's concern.
+// cues in file order. Pass CueAuto to detect WebVTT vs SRT from the header, or
+// pass CueSRT or CueWebVTT to enforce a specific format. IDs are distinct stable
+// ordinals within the file; TrackID is empty. Text is plain, terminal-safe, and
+// capped at 4096 runes per cue. WebVTT timestamp maps are unsupported. Errors
+// return no partial transcript. The caller owns r; cancellation of a blocking
+// reader is the caller's concern.
 func ParseCues(r io.Reader, format CueFormat) ([]CaptionCue, error) {
-	if format != CueSRT && format != CueWebVTT {
+	if format != CueSRT && format != CueWebVTT && format != CueAuto {
 		return nil, fmt.Errorf("ntvideo: unsupported cue format %q", format)
 	}
 	if r == nil {
@@ -38,13 +54,56 @@ func ParseCues(r io.Reader, format CueFormat) ([]CaptionCue, error) {
 	if err != nil {
 		return nil, err
 	}
-	header := strings.SplitN(strings.TrimPrefix(string(data), "\ufeff"), "\n", 2)[0]
-	header = strings.TrimSuffix(header, "\r")
-	vtt := header == "WEBVTT" || strings.HasPrefix(header, "WEBVTT ") || strings.HasPrefix(header, "WEBVTT\t")
-	if (format == CueWebVTT) != vtt {
+	detected := DetectCueFormat(data)
+	if format != CueAuto && format != detected {
 		return nil, fmt.Errorf("ntvideo: cue data does not match %s", format)
 	}
 	return parseCueData(data)
+}
+
+// stageInlineCaptionExt validates only transport bounds and selects the staged
+// file extension without parsing or UTF-8-scanning subtitle contents in the
+// host process. Malformed subtitle contents are reported via CaptionCueErr
+// (and parsed inside the confined helper when WithWorker is active) without
+// stopping video playback.
+func stageInlineCaptionExt(c Caption, maxBytes int64) (string, error) {
+	if c.Source != "" {
+		return "", fmt.Errorf("ntvideo: caption cannot specify both Source and Data")
+	}
+	limit := int64(maxCueBytes)
+	if maxBytes > 0 && maxBytes < limit {
+		limit = maxBytes
+	}
+	if int64(len(c.Data)) > limit {
+		return "", fmt.Errorf("ntvideo: inline caption exceeds %d-byte limit", limit)
+	}
+	switch c.Format {
+	case CueSRT:
+		return ".srt", nil
+	case CueWebVTT:
+		return ".vtt", nil
+	case "", CueAuto:
+		if DetectCueFormat(c.Data) == CueWebVTT {
+			return ".vtt", nil
+		}
+		return ".srt", nil
+	default:
+		return "", fmt.Errorf("ntvideo: unsupported cue format %q", c.Format)
+	}
+}
+
+func resolveInlineBrowserCaption(c Caption) error {
+	ext, err := stageInlineCaptionExt(c, maxCueBytes)
+	if err != nil {
+		return err
+	}
+	if !utf8.Valid(c.Data) {
+		return fmt.Errorf("ntvideo: inline caption requires valid UTF-8")
+	}
+	if ext != ".vtt" || DetectCueFormat(c.Data) != CueWebVTT {
+		return fmt.Errorf("ntvideo: browser inline captions require WebVTT")
+	}
+	return nil
 }
 
 var cueTimestamp = regexp.MustCompile(`^(?:(\d{1,4}):)?(\d{2}):(\d{2})[.,](\d{3})$`)
@@ -94,6 +153,7 @@ func parseCueData(data []byte) ([]CaptionCue, error) {
 		lines = lines[i:]
 	}
 	var cues []CaptionCue
+	totalBytes := 0
 	for i := 0; i < len(lines); {
 		if strings.TrimSpace(lines[i]) == "" {
 			i++
@@ -131,7 +191,12 @@ func parseCueData(data []byte) ([]CaptionCue, error) {
 		if len(cues) >= maxCaptionCues {
 			return nil, fmt.Errorf("caption cue count exceeds %d", maxCaptionCues)
 		}
-		cues = append(cues, CaptionCue{ID: strconv.Itoa(len(cues)), Start: begin, End: end, Text: cueText(strings.Join(block[1:], "\n"))})
+		cleaned := cueText(strings.Join(block[1:], "\n"))
+		totalBytes += len(cleaned)
+		if totalBytes > maxCueBytes {
+			return nil, fmt.Errorf("caption cue text exceeds %d bytes", maxCueBytes)
+		}
+		cues = append(cues, CaptionCue{ID: strconv.Itoa(len(cues)), Start: begin, End: end, Text: cleaned})
 	}
 	return cues, nil
 }

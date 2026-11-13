@@ -69,12 +69,52 @@ func TestPlayerForwardsToBackend(t *testing.T) {
 }
 
 func TestPlayerOptionsReachConfig(t *testing.T) {
-	p, _, c, _ := fakePlayer(t, PlayerOptions{DisableHardwareDecoding: true, DisableAudio: true, LibraryPath: "/trusted/libmpv"})
+	wcfg := WorkerConfig{WorkerPath: "/trusted/worker", WorkerArgs: []string{"--worker"}, StagePath: "/trusted/stage"}
+	p, _, c, _ := fakePlayer(t, PlayerOptions{
+		DisableHardwareDecoding: true,
+		DisableAudio:            true,
+		Loop:                    true,
+		CaptionEvents:           true,
+		SuppressSubtitles:       true,
+		LibraryPath:             "/trusted/libmpv",
+		Worker:                  &wcfg,
+	})
+	wcfg.WorkerArgs[0] = "mutated"
 	if err := p.Load("a.mp4"); err != nil {
 		t.Fatal(err)
 	}
-	if !c.disableHW || !c.disableAudio || !c.muted || c.libraryPath != "/trusted/libmpv" {
+	if !c.disableHW || !c.disableAudio || !c.muted || !c.loop || !c.captionEvents || !c.nativeCaptionOverlay || !c.useWorker || c.libraryPath != "/trusted/libmpv" || c.worker.WorkerPath != "/trusted/worker" || c.worker.WorkerArgs[0] != "--worker" {
 		t.Fatalf("config %+v", c)
+	}
+}
+
+func TestPlayerLoadSourceCueTimelineAndStep(t *testing.T) {
+	p, b, _, _ := fakePlayer(t, PlayerOptions{CaptionEvents: true})
+	tl := newCueTimeline([]CaptionCue{{ID: "0", Start: 0, End: time.Second, Text: "hi"}})
+	b.status = Status{
+		State:                Paused,
+		CaptionCuesAvailable: true,
+		cueData:              &cueSnapshot{track: "1", timeline: tl},
+	}
+	if err := p.LoadSource(Source{URL: "a.mp4", Captions: []Caption{{Data: []byte("1\n00:00:00,000 --> 00:00:01,000\nhi\n"), Default: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := p.Status()
+	if err != nil || s.cueData != nil || !s.CaptionCuesAvailable {
+		t.Fatalf("Status = %+v, %v", s, err)
+	}
+	gotTL, gotTrack := p.CueTimeline()
+	if gotTL == nil || gotTL.Len() != 1 || gotTrack != "1" {
+		t.Fatalf("CueTimeline = %v (%q)", gotTL, gotTrack)
+	}
+	if err := p.Step(); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("fakeBackend without step should return ErrUnsupported, got %v", err)
+	}
+	if err := p.SelectTrack("captions", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetSuppressSubtitles(true); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -125,7 +165,7 @@ func TestPlayerRealPlayback(t *testing.T) {
 	if source == "" {
 		t.Skip("set NTVIDEO_TEST_FILE")
 	}
-	p := NewPlayer(PlayerOptions{DisableHardwareDecoding: true, DisableAudio: true, LibraryPath: "/trusted/libmpv"})
+	p := NewPlayer(PlayerOptions{DisableHardwareDecoding: true, DisableAudio: true})
 	defer p.Close()
 	if err := p.Load(source); err != nil {
 		t.Fatal(err)
@@ -140,6 +180,19 @@ func TestPlayerRealPlayback(t *testing.T) {
 			t.Fatal(err)
 		}
 		if img != nil {
+			if _, ok := img.(*image.RGBA); !ok {
+				t.Fatalf("expected *image.RGBA frame, got %T", img)
+			}
+			if err := p.Step(); err != nil {
+				t.Fatalf("Step failed: %v", err)
+			}
+			s, err := p.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Width <= 0 || s.Height <= 0 || s.FPS <= 0 {
+				t.Fatalf("expected positive dimensions and FPS, got %+v", s)
+			}
 			return
 		}
 		time.Sleep(20 * time.Millisecond)

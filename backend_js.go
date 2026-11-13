@@ -3,6 +3,7 @@
 package ntvideo
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
@@ -88,6 +89,17 @@ func newBackend(c config) (b backend, err error) {
 	return d, nil
 }
 func (b *domBackend) Load(s Source) error {
+	s = cloneSource(s)
+	for i, c := range s.Captions {
+		if c.Data == nil {
+			continue
+		}
+		if err := resolveInlineBrowserCaption(c); err != nil {
+			return err
+		}
+		s.Captions[i].Source = "data:text/vtt;base64," + base64.StdEncoding.EncodeToString(c.Data)
+		s.Captions[i].Data = nil
+	}
 	return jsTry(func() {
 		b.cueCache = domCueCache{}
 		if b.cfg.captionEvents && !b.cueListening {
@@ -178,6 +190,12 @@ func (b *domBackend) Poll() (s Status, err error) {
 	err = jsTry(func() {
 		v := b.video
 		s = Status{State: Paused, Volume: v.Get("volume").Float(), Muted: v.Get("muted").Bool(), CurrentTime: browserDuration(v.Get("currentTime")), Duration: browserDuration(v.Get("duration"))}
+		if vw := v.Get("videoWidth"); vw.Type() == js.TypeNumber && vw.Int() > 0 {
+			s.Width = vw.Int()
+		}
+		if vh := v.Get("videoHeight"); vh.Type() == js.TypeNumber && vh.Int() > 0 {
+			s.Height = vh.Int()
+		}
 		if v.Get("networkState").Int() == 0 { // NETWORK_EMPTY: no source assigned.
 			s.State = Idle
 		} else if v.Get("readyState").Int() == 0 {
