@@ -1,6 +1,6 @@
 # Migration guide
 
-## Unreleased
+## Upgrading to v0.6.0
 
 Existing public API signatures are unchanged. New cue-timeline, overlay, caption-mode, and `Player` capabilities are additive:
 

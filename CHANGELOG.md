@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased (2026-11-13)
+## v0.6.0 (2026-11-15)
 
  * **Subtitle timeline, cursor, auto-detection, and confined parsing:**
    * Export `CueTimeline` (`NewCueTimeline`, `ParseCueTimeline`, `Len`, `Cues`, `ActiveAt`) and `CueCursor` (`NewCueCursor`, `Observe`, `Seek`, `SetTimeline`, `Active`, `Reset`) so headless and node-graph hosts share `Model`'s exact cue boundary, overlap, seek, track-change, and loop-wrap semantics, with terminal-safe plain-text sanitization and bounded cue/byte caps enforced by construction.
